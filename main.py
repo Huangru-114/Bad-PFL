@@ -119,9 +119,10 @@ if __name__ == "__main__":
     ############################### backdoor attack config ###############################
 
     
+    full_poison_func = None
     if args.ba == "our":
         full_poison_func = use_our_attack(clients, server, args.ba_target_label, args.ba_poison_rate)
-        
+
     
     ################################## run fl ##################################
 
@@ -134,11 +135,19 @@ if __name__ == "__main__":
     for client in clients:
 
         accuracy = evaluate_accuracy(client.local_model, client.test_dataloader)
-        asr = evaluate_accuracy(client.local_model, client.test_dataloader, full_poison_func)
-        print(f"Client id: {client.cid} \t Accuracy: {accuracy} \t ASR: {asr}")
+        acc_ls.append(accuracy)
 
-        acc_ls.append(accuracy), asr_ls.append(asr)
-    
+        if full_poison_func is not None:
+            asr = evaluate_accuracy(client.local_model, client.test_dataloader, full_poison_func)
+            asr_ls.append(asr)
+            print(f"Client id: {client.cid} \t Accuracy: {accuracy} \t ASR: {asr}")
+        else:
+            print(f"Client id: {client.cid} \t Accuracy: {accuracy}")
 
-    print(f"Avg acc: {torch.Tensor(acc_ls).mean().item():.2f}\tAcc std: {torch.Tensor(acc_ls).std().item():.2f}\t"
-            f"Avg ASR: {torch.Tensor(asr_ls).mean().item():.2f}\tASR std: {torch.Tensor(acc_ls).std().item():.2f}")
+    acc_t = torch.Tensor(acc_ls)
+    if asr_ls:
+        asr_t = torch.Tensor(asr_ls)
+        print(f"Avg acc: {acc_t.mean().item():.2f}\tAcc std: {acc_t.std().item():.2f}\t"
+                f"Avg ASR: {asr_t.mean().item():.2f}\tASR std: {asr_t.std().item():.2f}")
+    else:
+        print(f"Avg acc: {acc_t.mean().item():.2f}\tAcc std: {acc_t.std().item():.2f}")
