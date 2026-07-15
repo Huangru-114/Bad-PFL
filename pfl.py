@@ -18,9 +18,10 @@ def _register_param_isolation(server, is_private):
     server.register_func(_strip_distribute, "before_distribute_global")
 
 
-# head = last residual block + classifier (ResNet: layer4 + linear).
-# Override head_keys for other backbones (e.g. MobileNet: "classifier", DenseNet: "fc").
-HEAD_KEYS = ("layer4", "linear")
+# head = final classifier only (ResNet: linear), matching the canonical
+# FedRep/FedPer setup. Override head_keys for other backbones (e.g. MobileNet:
+# "classifier", DenseNet: "fc").
+HEAD_KEYS = ("linear",)
 
 
 def _is_head(key, head_keys=HEAD_KEYS):
