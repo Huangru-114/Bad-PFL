@@ -32,6 +32,7 @@ def load_argument():
     parser.add_argument("--client_local_step", type=int, default=15)
     parser.add_argument("--client_batch", type=int, default=32)
     parser.add_argument("--pfl", type=str, default="fedbn")
+    parser.add_argument("--fedrep_head_steps", type=int, default=None)
     parser.add_argument("--ba", type=str, default="our")
     parser.add_argument("--ba_target_label", type=int, default=0)
     parser.add_argument("--ba_poison_rate", type=float, default=0.2)
@@ -109,6 +110,11 @@ if __name__ == "__main__":
 
     if args.pfl == "fedbn":
         use_fedbn(server)
+    elif args.pfl == "fedper":
+        use_fedper(server)
+    elif args.pfl == "fedrep":
+        use_fedrep(clients, server, local_steps=args.client_local_step,
+                   head_steps=args.fedrep_head_steps)
 
     ############################### backdoor attack config ###############################
 
