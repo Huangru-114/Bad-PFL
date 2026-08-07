@@ -29,6 +29,7 @@ import pandas as pd
 
 from diag.config import load_config
 from diag.exp_common import COMMON_COLUMNS
+from diag.hooks import load_checkpoint
 
 STEPS: List[str] = []
 
@@ -105,8 +106,8 @@ def run(workdir: Path) -> int:
 
     from generator import Autoencoder
     generator = Autoencoder()
-    generator.load_state_dict(torch.load(attack_dir / "generator.pt",
-                                         map_location="cpu"), strict=True)
+    generator.load_state_dict(load_checkpoint(attack_dir / "generator.pt"),
+                              strict=True)
     generator.eval()
 
     _step("exp_a --smoke")

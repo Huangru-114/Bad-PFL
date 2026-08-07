@@ -30,10 +30,28 @@ import torch.nn as nn
 
 from event_emitter import fl_event_emitter
 
-__all__ = ["run_dir_name", "save_state_dict", "save_run", "attach_save_hook",
-           "build_client_meta", "verify_partition_consistency",
-           "extract_generator", "load_client_model", "load_meta",
-           "flatten_state_dict"]
+__all__ = ["run_dir_name", "save_state_dict", "load_checkpoint", "save_run",
+           "attach_save_hook", "build_client_meta",
+           "verify_partition_consistency", "extract_generator",
+           "load_client_model", "load_meta", "flatten_state_dict"]
+
+
+def load_checkpoint(path) -> Dict[str, torch.Tensor]:
+    """加载本工具包保存的 checkpoint（``weights_only=True``）。
+
+    我们落盘的东西全部是纯张量 state_dict，外加 ``delta.pt`` 里的一个字符串
+    备注 —— 没有任何自定义类或可执行对象，因此安全模式完全适用。
+
+    显式指定 ``weights_only=True`` 有两个作用：消掉 torch 2.4+ 的
+    FutureWarning；以及在未来 torch 把默认值翻转为 True 时，行为不会改变。
+
+    对更老的、不支持该参数的 torch 版本会自动回退。
+    """
+    path = Path(path)
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:   # torch < 1.13 没有 weights_only 参数
+        return torch.load(path, map_location="cpu")
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +317,7 @@ def load_client_model(ckpt_path, model_factory: Callable[[], nn.Module],
     （utils.py:30）依赖它，但它是 main.py 外部注入的，不是 nn.Module 的原生属性。
     """
     model = model_factory()
-    state = torch.load(Path(ckpt_path), map_location="cpu")
+    state = load_checkpoint(ckpt_path)
     model.load_state_dict(state, strict=True)
     model.to(device)
     model.device = device

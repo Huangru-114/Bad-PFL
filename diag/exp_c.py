@@ -46,7 +46,7 @@ from .config import load_config
 from .exp_common import add_common_args, common_row, load_bundle, write_csv
 from .features import (class_prototypes, extract_penultimate, find_last_linear,
                        margin_matrix)
-from .hooks import flatten_state_dict
+from .hooks import flatten_state_dict, load_checkpoint
 from .metrics import baseline_signals, excess_response, observable_score
 
 __all__ = ["run_exp_c", "main"]
@@ -162,8 +162,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         from generator import Autoencoder
         generator = Autoencoder()
         generator.load_state_dict(
-            torch.load(Path(gen_dir) / "generator.pt", map_location="cpu"),
-            strict=True)
+            load_checkpoint(Path(gen_dir) / "generator.pt"), strict=True)
         generator.to(attack_bundle.device).eval()
 
     frame = run_exp_c(attack_bundle, clean_bundle, generator)

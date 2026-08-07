@@ -15,8 +15,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from diag.hooks import (extract_generator, flatten_state_dict, run_dir_name,
-                        save_state_dict, verify_partition_consistency)
+from diag.hooks import (extract_generator, flatten_state_dict, load_checkpoint,
+                        run_dir_name, save_state_dict,
+                        verify_partition_consistency)
 
 
 def _meta(mode: str, num_clients: int = 3):
@@ -140,7 +141,7 @@ def test_save_state_dict_is_detached_cpu_copy():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "m.pt"
         save_state_dict(model, path)
-        saved = torch.load(path, map_location="cpu")
+        saved = load_checkpoint(path)
         # 保存后原地污染模型权重，落盘的副本不应受影响
         with torch.no_grad():
             model.weight.add_(100.0)

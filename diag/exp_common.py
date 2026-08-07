@@ -16,7 +16,7 @@ import torch.nn as nn
 
 from . import REPO_ROOT  # noqa: F401
 from .config import Cfg, load_config
-from .hooks import load_meta
+from .hooks import load_checkpoint, load_meta
 from .perturb import make_delta_fn, make_xi_fn
 from .probe import ProbeSet, build_probe_set
 from .run_fl import build_datasets
@@ -111,7 +111,7 @@ class RunBundle:
             path = self.ckpt_dir / f"{name}.pt"
             if not path.exists():
                 raise FileNotFoundError(f"找不到 checkpoint: {path}")
-            model.load_state_dict(torch.load(path, map_location="cpu"), strict=True)
+            model.load_state_dict(load_checkpoint(path), strict=True)
         # ckpt_dir 为 None 时保持随机初始化 —— 仅冒烟测试路径。
         model.to(self.device)
         model.device = self.device      # utils.evaluate_accuracy 依赖此属性
@@ -129,14 +129,13 @@ class RunBundle:
         if self.ckpt_dir is None:
             return {k: v.detach().cpu()
                     for k, v in self.client_model(client_id).state_dict().items()}
-        return torch.load(self.ckpt_dir / f"client_{int(client_id)}.pt",
-                          map_location="cpu")
+        return load_checkpoint(self.ckpt_dir / f"client_{int(client_id)}.pt")
 
     def global_state(self) -> Dict[str, torch.Tensor]:
         if self.ckpt_dir is None:
             return {k: v.detach().cpu()
                     for k, v in self.global_model().state_dict().items()}
-        return torch.load(self.ckpt_dir / "global.pt", map_location="cpu")
+        return load_checkpoint(self.ckpt_dir / "global.pt")
 
     # -- 生成器 -------------------------------------------------------------
     def generator(self, required: bool = True) -> Optional[nn.Module]:
@@ -156,7 +155,7 @@ class RunBundle:
                         f"找不到 {path}。δ 只存在于攻击 run；"
                         f"请用 --gen-ckpt-dir 指向对应的 attack run 目录。")
                 return None
-            model.load_state_dict(torch.load(path, map_location="cpu"), strict=True)
+            model.load_state_dict(load_checkpoint(path), strict=True)
         model.to(self.device)
         model.eval()
         self._cache["generator"] = model

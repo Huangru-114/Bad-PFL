@@ -39,6 +39,7 @@ import pandas as pd
 
 from .config import load_config
 from .exp_common import add_common_args, common_row, load_bundle, write_csv
+from .hooks import load_checkpoint
 from .metrics import recovery_score
 
 __all__ = ["run_exp_b", "main"]
@@ -95,8 +96,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         from generator import Autoencoder
         generator = Autoencoder()
         generator.load_state_dict(
-            torch.load(Path(args.gen_ckpt_dir) / "generator.pt", map_location="cpu"),
-            strict=True)
+            load_checkpoint(Path(args.gen_ckpt_dir) / "generator.pt"), strict=True)
         generator.to(bundle.device).eval()
     elif not bundle.smoke:
         raise ValueError("非冒烟模式下必须提供 --gen-ckpt-dir")

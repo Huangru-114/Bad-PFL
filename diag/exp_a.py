@@ -37,6 +37,7 @@ import pandas as pd
 from .config import load_config
 from .exp_common import (add_common_args, common_row, load_bundle, resolve_device,
                          write_csv)
+from .hooks import load_checkpoint
 from .metrics import NATURALNESS_GROUPS, naturalness
 
 __all__ = ["run_exp_a", "main"]
@@ -92,8 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         import torch
         generator = Autoencoder()
         generator.load_state_dict(
-            torch.load(Path(args.gen_ckpt_dir) / "generator.pt", map_location="cpu"),
-            strict=True)
+            load_checkpoint(Path(args.gen_ckpt_dir) / "generator.pt"), strict=True)
         generator.to(bundle.device).eval()
     elif not bundle.smoke:
         raise ValueError(
