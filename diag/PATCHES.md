@@ -1,0 +1,180 @@
+# PATCHES.md — 对原仓库的改动记录
+
+## 摘要
+
+**对原仓库文件的改动为零。**
+
+```
+$ git diff --stat main -- . ':(exclude)diag'
+(空)
+```
+
+`main.py` / `client.py` / `server.py` / `fba.py` / `fl_process.py` / `pfl.py` /
+`utils.py` / `generator.py` / `trigger.py` / `resnet.py` / `mobilenet.py` /
+`densenet.py` / `event_emitter.py` 全部保持原样，随时可 diff。
+
+诊断所需的全部行为差异都在 `diag/` 里以**旁路实现**的方式完成，而不是修改原文件。
+下面逐条列出这些差异 —— 因为**语义上**它们等价于对原实现打补丁，即使字面上没有改动原文件。
+
+---
+
+## 一、旁路实现的差异（等价于补丁）
+
+### P1. 补齐随机性播种
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | `utils.py:8-13` `set_random_seed` |
+| **诊断侧实现** | `diag/config.py::set_all_seeds` |
+| **原实现做了什么** | 只播种 `torch.manual_seed` / `torch.cuda.manual_seed_all`，并设置 cudnn 确定性 |
+| **问题** | **没有播种 numpy，也没有播种 python `random`**。而数据划分完全依赖 `np.random`（`main.py:67` 的 `np.random.dirichlet`，`utils.py:65/71/74` 的 `randint`/`uniform`），客户端顺序依赖 `random.shuffle`（`main.py:95`）。后果是**同一条命令跑两次得到不同的数据划分** |
+| **诊断侧做法** | 额外调用 `random.seed(seed)` 与 `np.random.seed(seed)` |
+| **是否影响训练动力学** | **是，但这是必需的修复**。它改变了具体划分出来的分片内容（因为随机流不同了），但不改变划分的**分布**（仍是同参数的 Dirichlet），也不触碰任何攻击逻辑。**不做这个修复就无法构造 clean/attack 对照组** |
+| **用户确认** | 已确认（"接受全部修复"） |
+
+### P2. 隔离客户端采样的随机流
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | `utils.py:23-26` `random_select`（用全局 torch RNG 的 `torch.randperm`） |
+| **诊断侧实现** | `diag/config.py::make_select_rule`（独立的 `torch.Generator`） |
+| **接入方式** | `basic_fl_process` 的 `select_rule` 本来就是参数（`fl_process.py:4,11`），直接传入即可，**无需改动 `utils.py`** |
+| **问题** | 攻击 run 在训练过程中会额外消耗全局 torch RNG：`Autoencoder()` 初始化（`fba.py:27`）、每次 `pgd_attack` 的 `uniform_` 随机起点（`fba.py:8`）、每轮 30 次生成器迭代（`fba.py:33`）。而客户端采样共用同一条全局流，导致 **clean run 与 attack run 每轮选中的客户端集合完全不同** —— 两组"每个客户端被训练了多少次"对不上 |
+| **是否影响训练动力学** | **是**。采样序列与原实现不同（分布相同，均匀无放回）。攻击语义、投毒函数、聚合规则均不受影响 |
+| **可验证性** | `meta.json` 记录 `n_participations`；`verify_partition_consistency` 会在两次 run 的参与轮次不同时给出提示 |
+| **用户确认** | 已确认（"接受全部修复"） |
+
+### P3. 评估路径改用 `drop_last=False`
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | `main.py:82-84`（测试 loader 用了 `drop_last=True`） |
+| **诊断侧实现** | `diag/probe.py::make_eval_loader`（`drop_last=False`, `shuffle=False`） |
+| **问题** | `drop_last=True` 是训练时的约定（保证 batch 形状一致、BN 统计稳定），泄漏到了评估路径。每个客户端静默丢掉最多 `batch_size - 1` 个样本；本地测试集只有 100 个样本时实际只剩 96。而且丢弃比例随客户端样本数变化，在高异构下会给指标注入**系统性偏差** |
+| **是否影响训练动力学** | **否**。只影响评估，训练 loader 仍保留 `drop_last=True`（见 `diag/run_fl.py` 中的注释） |
+| **回归测试** | `diag/tests/test_eval_loader.py`（专门盯这个 bug） |
+
+### P4. 生成 ξ 时把模型置于 `eval()` 模式
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | 投毒路径中模型处于 `train()`：`client.py:35` 的 `self.local_model.train()` 先于 `client.py:36` 的 `self.fetch_data()`，而 `fetch_data` 会触发 `our_poison_func` → `pgd_attack` |
+| **诊断侧实现** | `diag/perturb.py::make_xi_fn`（`use_eval_mode=True`，默认开启） |
+| **理由** | 诊断必须在 `eval()` 下前向，否则 BatchNorm 用 batch 统计量并**更新 running stats**，污染所有下游特征、原型、边距。这是任务 spec 明确列出的陷阱 |
+| **代价** | 诊断时算出的 ξ 与训练时刻的 ξ **不完全相同**（BN 行为不同）。这是刻意的取舍：eval 是可复现的、无副作用的 |
+| **是否影响训练动力学** | **否**。只在离线诊断路径调用，训练时完全不经过这段代码 |
+| **可关闭** | `make_xi_fn(..., use_eval_mode=False)` 可切回 train 模式，供敏感性检查 |
+
+### P5. 固定 ξ 的随机起点
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | `fba.py:8` `torch.zeros_like(images).uniform_(-epsilon, epsilon)`，使用全局 RNG，未固定 |
+| **诊断侧实现** | `diag/perturb.py::_temporary_torch_seed`：调用 `pgd_attack` 前保存全局 RNG 状态、设定 `seed + call_index`，调用后恢复 |
+| **理由** | 同一输入多次调用会得到不同的 ξ，指标不可复现 |
+| **关键点** | **`pgd_attack` 本身一行未改**，是直接 `import fba` 后调用原函数。只控制它读取的随机流 |
+| **是否影响训练动力学** | **否**。RNG 状态在调用前后被完整保存/恢复，不扰乱调用方所在的随机流（有 `test_probe.py::test_build_probe_set_does_not_disturb_global_numpy_rng` 的同类保证） |
+
+### P6. 调用 `pgd_attack` 后清零模型梯度
+
+| 项 | 内容 |
+|---|---|
+| **对应原实现** | `fba.py:16` 的 `loss.backward()` 会把梯度**累加进模型参数**。在 `local_update` 中 `optimizer.zero_grad()`（`client.py:34`）发生在 `fetch_data()`（`client.py:36`）**之前**，所以 PGD 的梯度会混入本轮参数更新 |
+| **诊断侧实现** | `diag/perturb.py::make_xi_fn` 在 `finally` 中 `model.zero_grad(set_to_none=True)` |
+| **理由** | 诊断只做读操作，不应在加载的模型上留下副作用 |
+| **是否影响训练动力学** | **否**。原实现的这一行为**被完整保留**（我没有改 `fba.py` 也没有改 `client.py`），训练时该怎样还是怎样。清零只发生在离线诊断路径 |
+| **回归测试** | `test_perturb.py::test_xi_fn_does_not_leave_gradients_on_model` |
+
+---
+
+## 二、只读埋点（不改变任何行为）
+
+### H1. checkpoint 与元数据保存
+
+- **接入点**：`event_emitter.fl_event_emitter` 的 `on_fl_end` 事件。
+- **为什么零侵入**：`fl_process.basic_fl_process` 本来就发射了 6 个事件
+  （`fl_process.py:6,14,22,32,38,41`），但原仓库**没有注册任何监听器**。
+  `diag/hooks.py::attach_save_hook` 只是往这个既有总线上挂了个 handler。
+- **保存内容**：全局模型、每个客户端的本地模型、生成器、`meta.json`。
+- **注意事项**：`BasicClient.upload_model`（`client.py:28`）返回的是 `state_dict()`
+  的**引用**，而 `server.agg_avg`（`server.py:4-10`）会**原地修改 `state_dicts[0]`**。
+  所以 `save_state_dict` 深拷贝到 CPU 后才落盘
+  （回归测试 `test_hooks.py::test_save_state_dict_is_detached_cpu_copy`）。
+
+### H2. 参与轮次计数
+
+- **接入点**：`on_client_begin` 事件（`fl_process.py:22`）。
+- **行为**：只对客户端对象上一个自定义属性 `diag_n_participations` 做自增。
+- **训练结束后注销**（`diag/run_fl.py` 的 `finally` 块），避免跨 run 污染。
+
+### H3. 生成器提取
+
+- **实现**：`diag/hooks.py::extract_generator`。
+- **做法**：`fba.use_our_attack`（`fba.py:25-66`）只返回 `eval_func`，把
+  `trigger_gen` 留在闭包里。这里通过 `__closure__` / `co_freevars` **只读**取出。
+- **失败时的行为**：若原仓库将来重命名了这个自由变量，会抛出带实际变量名的
+  `RuntimeError`，便于定位 —— 刻意不做静默回退
+  （回归测试 `test_hooks.py::test_extract_generator_reports_actual_freevars_on_failure`）。
+
+### H4. 客户端自定义属性
+
+在 `diag/run_fl.py` 里给客户端对象附加了以下属性，全部以 `diag_` 或明确语义命名，
+**不与原仓库的任何属性重名**：
+
+| 属性 | 含义 |
+|---|---|
+| `partition_idx` | 该客户端拿到的原始数据分片编号（`cid` 是 shuffle 之后才赋的，两者不同） |
+| `diag_is_malicious` | 本次 run 中是否**实际**投毒（clean run 恒为 False） |
+| `diag_is_malicious_slot` | 是否占据"恶意槽位"（分片 90..99），两种模式下一致，用于跨模式配对 |
+| `diag_poison_ratio` | 实际投毒比例 |
+| `diag_n_participations` | 被选中参与训练的轮次数 |
+
+---
+
+## 三、`diag/run_fl.py` 与 `main.py` 的关系
+
+`main.py` 是 `if __name__ == "__main__"` 脚本，无法作为模块复用。
+`diag/run_fl.py` **复刻**了它的构造流程（argparse 默认值逐项对齐），
+以便原文件保持零 diff。
+
+**已知风险：两边会漂移。** 若将来有人改了 `main.py` 的构造逻辑，
+`run_fl.py` 不会自动跟进。逐项对照关系：
+
+| main.py | diag/run_fl.py | 是否一致 |
+|---|---|---|
+| `:58` `ToTensor()` only，无归一化/增强 | `build_datasets` | ✅ |
+| `:65-66` 每客户端 500 / 100 样本 | `train_per_client` / `test_per_client` | ✅ |
+| `:67` `class_priors` train/test 共用 | 同 | ✅ |
+| `:68-77` Dirichlet 划分 | 调用同一个 `client_inner_dirichlet_partition` | ✅ |
+| `:78-84` loader，`drop_last=True` | 训练 loader 相同 | ✅ |
+| `:89-94` 前 90 个 Basic / 后 10 个 Poison | 同（clean 模式下全为 Basic） | ✅ 见下 |
+| `:95-99` `shuffle` 后赋 `cid` | 同 | ✅（现在可复现） |
+| `:103-106` 全局 resnet10 + `agg_rule` | 同 | ✅ |
+| `:110-111` FedBN | 同 | ✅ |
+| `:116-117` `use_our_attack` | 同（仅 attack 模式） | ✅ |
+| `:122-123` `basic_fl_process` | 同，但 `select_rule` 换成隔离 RNG 的版本 | ⚠️ 见 P2 |
+| `:127-138` 最终评估 ACC/ASR | **未复刻** | ⚠️ 见下 |
+
+两点补充说明：
+
+1. **clean 模式下恶意槽位仍创建 `BasicClient`**，而不是创建 `PoisonClient` 再关掉投毒。
+   这样保证两种模式在训练开始前消耗的 torch RNG **完全相同**
+   （两个分支都各自创建一个 resnet10）。
+2. **`main.py:127-138` 的 ACC/ASR 评估没有复刻**。原因是它的 ASR 口径有两个问题
+   （见 `REPO_MAP.md` §4.3）：不排除目标类原样本（`fba.py:52` 把全部标签改成
+   `target_label`），且 ξ 由循环里**最后一个**恶意客户端的模型生成（`fba.py:64`）。
+   诊断侧在 `diag/metrics.py::excess_response` 里用 `probe.query`
+   （全部为非目标类样本）重新定义了 ASR。**两个口径的数字不可直接比较。**
+
+---
+
+## 四、新增依赖
+
+无。用到的 `torch` / `numpy` / `pandas` / `scipy` / `matplotlib` / `pyyaml`
+在当前环境中均已存在。
+
+- `pytest` **未安装**，因此提供了 `diag/tests/run_tests.py` 作为后备运行器。
+  测试文件本身是标准 pytest 风格，装了 pytest 的环境可直接 `pytest diag/tests`。
+- `torchvision` **未安装**，因此冒烟测试全程使用
+  `diag/run_fl.py::SyntheticImageDataset` 合成数据。**正式实验需要 torchvision
+  来加载 CIFAR-10。**

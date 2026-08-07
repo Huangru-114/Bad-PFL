@@ -1,0 +1,112 @@
+# diag/config.yaml — 诊断实验的集中配置
+# 所有模块通过 diag.config.load_config() 读取本文件，不要在代码里硬编码参数。
+
+paths:
+  ckpt_root: ./checkpoints
+  results_root: ./results
+
+data:
+  root: ./data
+  dataset: cifar10
+  num_classes: 10
+  target_class: 0            # CIFAR-10 class 0 = airplane，与 main.py --ba_target_label 默认值一致
+
+# ---------------------------------------------------------------------------
+# FL 训练配置。默认值与 main.py 的 argparse 默认值逐项对齐。
+# ---------------------------------------------------------------------------
+fl:
+  client_num: 100
+  bad_client_num: 10
+  select_per_round: 10
+  local_steps: 15            # 注意：是 step 数不是 epoch 数
+  batch_size: 32
+  learning_rate: 0.1
+  total_round: 300
+  poison_rate: 0.2
+  pfl: fedbn                 # 本仓库唯一实现的 PFL 方法
+
+# ---------------------------------------------------------------------------
+# 正式扫描矩阵。run_matrix.py 读取；本次任务不执行。
+# ---------------------------------------------------------------------------
+sweep:
+  alpha: [1.0, 0.5, 0.1, 0.05]
+  seed: [0, 1, 2]
+  mode: [clean, attack]
+
+# ---------------------------------------------------------------------------
+# 冒烟测试专用的极小配置。唯一目的是验证代码跑得通，无任何科学含义。
+# ---------------------------------------------------------------------------
+smoke:
+  device: cpu
+  num_clients: 4
+  bad_client_num: 1
+  rounds: 2
+  local_steps: 1
+  samples_per_client: 64
+  test_samples_per_client: 64
+  select_per_round: 4
+  batch_size: 16
+  num_classes: 10
+  alpha: 0.5
+  seed: 0
+  # 合成探针集的规模（远小于正式配置，仅为跑通流程）
+  probe:
+    n_ref: 24
+    n_other_per_class: 6
+    n_query: 32
+    n_target: 16
+    batch_size: 16
+    knn_k: 5
+
+# ---------------------------------------------------------------------------
+# 共享探针集（probe set）。
+#
+# 关键设计：所有诊断指标在【同一份固定数据】上测量，只让【模型】变化。
+# 若每个客户端在自己的本地测试集上测，跨客户端方差会同时包含"模型差异"与
+# "评估数据差异"，后者在高异构下会压倒前者，使实验 A 失去归因能力。
+#
+# probe.seed 与实验 seed 解耦：探针集在所有 alpha / seed / mode 之间完全一致，
+# 保证任意两次测量是 apples-to-apples 的。
+# ---------------------------------------------------------------------------
+probe:
+  source: test               # 从全局测试集抽取
+  seed: 12345                # 固定，不随实验 seed 变化
+  n_ref: 500                 # 真实目标类图片，作为 kNN 的参照分布
+  n_other_per_class: 200     # 每个非目标类 200 张 → 9 类共 1800，作为 kNN 的对照分布
+  n_query: 1000              # 施加 delta / 随机噪声的载体（非目标类），与 other 不相交
+  n_target: 400              # 实验 B 的 Table 24 复现用（目标类），与 ref 不相交
+  batch_size: 256
+
+# ---------------------------------------------------------------------------
+# 指标参数
+# ---------------------------------------------------------------------------
+metrics:
+  knn_k: 20                  # 经验规则 |ref| >= 10k；n_ref=500 有充分余量
+  lambda_std: 1.0            # observable_score 中 std 项的权重
+  lambda_sweep: [0.0, 0.5, 1.0, 2.0]   # 图 C3 的敏感性分析
+  min_class_count: 5         # 仅用于【本地】类原型（observable_score）；低于此数的类填 nan
+  mad_eps: 1.0e-12           # MAD 为 0 时的保护阈值，低于此值判为退化并填 nan
+  # 注意：min_target_samples 已被删除。
+  # 改用共享探针集后所有客户端都能算出有效指标，本地目标类样本数
+  # 改为 CSV 中的【协变量】列 n_target_samples_local（图 A4 的横轴）。
+
+# ---------------------------------------------------------------------------
+# 扰动参数。数值与 fba.py 保持一致。
+# ---------------------------------------------------------------------------
+perturb:
+  eps_delta: 0.015686274509803921    # 4/255，对应 fba.py:54 的 `/255.*4.`
+  eps_xi: 0.015686274509803921       # 4/255，对应 fba.py:6 的 epsilon 默认值
+  pgd_alpha: 0.015686274509803921    # 4/255，对应 fba.py:6 的 alpha 默认值
+  pgd_num_iter: 1                    # 对应 fba.py:6 的 num_iter 默认值
+  xi_seed: 777                       # 固定 ξ 随机起点，使 ξ 可复现（原实现未固定）
+  noise_seed: 888                    # random_noise 负对照的种子
+  pixel_min: 0.0                     # main.py 只用 ToTensor()，像素 ∈ [0,1]
+  pixel_max: 1.0
+
+# ---------------------------------------------------------------------------
+# 确定性设置
+# ---------------------------------------------------------------------------
+determinism:
+  cudnn_deterministic: true
+  cudnn_benchmark: false
+  select_rule_seed_offset: 10000     # 客户端采样使用独立 RNG，其种子 = seed + 该偏移
