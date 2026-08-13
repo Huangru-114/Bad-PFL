@@ -1,0 +1,4 @@
+信号,语义,应有极性,修正前是否正确,已显式声明
+A_observable,构造上 -mean - λ·std 的最大值，越大越可疑,+1（越大越可疑）,True,True
+l2_to_median,距中位数更新越远 = 越离群 = 越可疑,+1（越大越可疑）,True,True
+sign_consistency,越大 = 越贴近多数派 = 越像良性,-1（须取负）,False,True

@@ -1,0 +1,16 @@
+exp,alpha,seed,path,n_rows,n_cols
+A,0.05,0,results/raw/expA_a0.05_s0.csv,400,16
+A,0.1,0,results/raw/expA_a0.1_s0.csv,400,16
+A,0.5,0,results/raw/expA_a0.5_s0.csv,400,16
+A,1.0,0,results/raw/expA_a1.0_s0.csv,400,16
+B,0.05,0,results/raw/expB_a0.05_s0.csv,101,16
+B,0.1,0,results/raw/expB_a0.1_s0.csv,101,16
+B,0.5,0,results/raw/expB_a0.5_s0.csv,101,16
+B,1.0,0,results/raw/expB_a1.0_s0.csv,101,16
+C,0.05,0,results/raw/expC_a0.05_s0.csv,100,21
+C,0.1,0,results/raw/expC_a0.1_s0.csv,100,21
+C,0.5,0,results/raw/expC_a0.5_s0.csv,100,21
+C,1.0,0,results/raw/expC_a1.0_s0.csv,100,21
+D,0.05,0,results/raw/expD_a0.05_s0.csv,1000,17
+D,0.1,0,results/raw/expD_a0.1_s0.csv,1000,17
+D,0.5,0,results/raw/expD_a0.5_s0.csv,1000,17

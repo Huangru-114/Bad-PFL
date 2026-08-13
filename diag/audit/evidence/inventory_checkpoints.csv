@@ -1,0 +1,10 @@
+mode,alpha,seed,path,has_meta,has_global,has_generator,n_client_ckpt
+attack,0.05,0,checkpoints/attack_a0.05_s0,True,True,True,100
+attack,0.1,0,checkpoints/attack_a0.1_s0,True,True,True,100
+attack,0.5,0,checkpoints/attack_a0.5_s0,True,True,True,100
+attack,1.0,0,checkpoints/attack_a1.0_s0,True,True,True,100
+clean,0.05,0,checkpoints/clean_a0.05_s0,True,True,False,100
+clean,0.1,0,checkpoints/clean_a0.1_s0,True,True,False,100
+clean,0.5,0,checkpoints/clean_a0.5_s0,True,True,False,100
+clean,1.0,0,checkpoints/clean_a1.0_s0,True,True,False,100
+clean,1.0,1,checkpoints/clean_a1.0_s1,True,True,False,100

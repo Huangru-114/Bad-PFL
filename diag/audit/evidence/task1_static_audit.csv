@@ -1,0 +1,6 @@
+混杂源,结论,证据（代码行号）
+本地步数,相同,`fl_process.py:29-30` 对所有被选中的客户端一律 `for _ in range(local_steps)`，不区分类型；`diag/run_fl.py` 也只传一个 `local_steps`。
+学习率 / 优化器,相同,"`diag/run_fl.py` 用同一个 `partial(torch.optim.SGD, lr=learning_rate)` 构造全部客户端，`BasicClient.__init__`(client.py:13) 与 `PoisonClient`(client.py:118-125) 共用该路径。"
+梯度/模型放缩、norm boosting、model replacement,不存在,`fba.py` 全文无 scale factor / norm clipping / 更新替换操作；`server.agg_and_update`(server.py:29-34) 恒调 `agg_avg`，`--agg_rule` 被解析(main.py:106)但从不读取。
+生成器训练是否反传进本地模型,会，但被清除,`trigger_gen_trainer`(fba.py:31-43) 的 `loss.backward()`(fba.py:41) 确实经过 `client.local_model`，但它在 `receive_model` 阶段执行，随后第一次 `local_update` 的 `zero_grad()`(client.py:34) 会清掉，**不泄漏**。
+投毒路径的 PGD 梯度是否泄漏进参数更新,**会，且不被清除**,`zero_grad()`(client.py:34) 早于 `fetch_data()`(client.py:36)，而 `pgd_attack` 的 `loss.backward()`(fba.py:16) 在 fetch 期间累加进参数，随后直接被 `scaler.step()`(client.py:72) 使用。**这是唯一确认的系统性差异。**
