@@ -28,6 +28,7 @@ TEST_MODULES = [
     "diag.tests.test_eval_loader",
     "diag.tests.test_hooks",
     "diag.tests.test_analysis",
+    "diag.tests.test_audit",
 ]
 
 

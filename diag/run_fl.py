@@ -93,10 +93,17 @@ class SyntheticImageDataset(Dataset):
         return self.data[index], self.targets[index]
 
 
-def build_datasets(cfg: Cfg, smoke: bool) -> Tuple[Dataset, Dataset, int]:
+def build_datasets(cfg: Cfg, smoke: bool,
+                   dataset_sizes: Optional[Tuple[int, int]] = None
+                   ) -> Tuple[Dataset, Dataset, int]:
     """返回 ``(train_dataset, test_dataset, num_classes)``。
 
     ``smoke=True`` 用合成数据（不依赖 torchvision）；否则加载 CIFAR-10。
+
+    ``dataset_sizes``：显式指定 ``(n_train, n_test)``，仅对合成数据有意义。
+    离线分析 checkpoint 时**必须**传入 meta.json 记录的 ``synthetic_sizes``，
+    否则重建出的合成数据集与训练时不一致，``train_indices`` 会越界或（更糟）
+    指向不同的图片。CIFAR-10 路径固定，不受影响。
     """
     if smoke:
         smoke_cfg = cfg.smoke
@@ -115,6 +122,8 @@ def build_datasets(cfg: Cfg, smoke: bool) -> Tuple[Dataset, Dataset, int]:
             -int(probe_cfg.n_query) // n_other_classes)   # 向上取整
         per_class = max(need_target_class, need_other_class)
         n_test = max(n_test, (per_class + 4) * num_classes)
+        if dataset_sizes is not None:
+            n_train, n_test = int(dataset_sizes[0]), int(dataset_sizes[1])
         return (SyntheticImageDataset(n_train, num_classes, seed=1234),
                 SyntheticImageDataset(n_test, num_classes, seed=5678),
                 num_classes)
@@ -284,6 +293,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         "poison_rate": poison_rate if mode == "attack" else 0.0,
         "seeds": seed_info,
         "select_rule_seed": seed + int(cfg.determinism.select_rule_seed_offset),
+        "synthetic_sizes": ([len(train_dataset), len(test_dataset)]
+                            if smoke else None),
         "torch_version": torch.__version__,
         "numpy_version": np.__version__,
         "clients": build_client_meta(clients, train_labels_by_client,

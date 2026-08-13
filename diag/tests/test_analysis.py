@@ -195,3 +195,42 @@ def test_plot_d1_accepts_explicit_poisoned_source_classes():
     with tempfile.TemporaryDirectory() as tmp:
         path = plot_d1(raw_d, Path(tmp) / "d1.png", poisoned_source_classes=[1, 2])
         assert path.stat().st_size > 1000
+
+
+# ---------------------------------------------------------------------------
+# 检测分数的极性约定
+# ---------------------------------------------------------------------------
+def test_signal_direction_map_covers_known_signals():
+    from diag.analysis import SIGNAL_DIRECTION, signal_direction
+
+    assert SIGNAL_DIRECTION["sign_consistency"] == -1, (
+        "sign_consistency 越大越像良性，作检测分数必须取负")
+    assert SIGNAL_DIRECTION["A_observable"] == +1
+    assert SIGNAL_DIRECTION["l2_to_median"] == +1
+    assert signal_direction("A_lambda_1.0") == (+1, True)
+    assert signal_direction("未知信号") == (+1, False), (
+        "未声明的信号按 +1 处理，但必须标记为未声明，以便如实报告")
+
+
+def test_summarize_c_applies_direction_and_records_raw():
+    """修正后的 AUC 必须恰为 1 - 原始值（极性翻转的定义性质）。"""
+    from diag.analysis import summarize_c
+
+    summary = summarize_c(_fake_exp_c())
+    sign_block = summary[summary["signal"] == "sign_consistency"]
+    assert len(sign_block) > 0
+    assert (sign_block["direction"] == -1).all()
+    assert np.allclose(sign_block["auc"], 1.0 - sign_block["auc_raw"])
+
+    # 方向为 +1 的信号不应被改动
+    for signal in ("A_observable", "l2_to_median"):
+        block = summary[summary["signal"] == signal]
+        assert np.allclose(block["auc"], block["auc_raw"]), (
+            f"{signal} 的极性本来就正确，修正不应改变它的 AUC")
+
+
+def test_summarize_c_direction_declared_flag():
+    from diag.analysis import summarize_c
+
+    summary = summarize_c(_fake_exp_c())
+    assert summary["direction_declared"].all()

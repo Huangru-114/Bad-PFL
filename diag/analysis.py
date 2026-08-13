@@ -20,9 +20,45 @@ import numpy as np                # noqa: E402
 import pandas as pd               # noqa: E402
 
 __all__ = ["load_raw", "auc_score", "pearson_spearman", "mannwhitney",
+           "SIGNAL_DIRECTION", "signal_direction",
            "summarize", "summarize_c", "summarize_d",
            "plot_a1", "plot_a2", "plot_a3", "plot_a4",
            "plot_c1", "plot_c2", "plot_c3", "plot_d1", "plot_d2"]
+
+# ---------------------------------------------------------------------------
+# 检测分数的极性约定
+#
+# ``auc_score(score, labels=is_malicious)`` 的约定是**分数越大越像恶意**。
+# 但并非每个信号天然满足这个方向，必须逐个显式声明，否则会静默地把 AUC 算反：
+#
+#   A_observable      +1  构造上就是"越大越可疑"（-mean - lambda*std 的最大值）
+#   l2_to_median      +1  离中位数更新越远 = 越离群 = 越可疑
+#   sign_consistency  -1  越大表示越贴近多数派方向 = 越像**良性**，故须取负
+#
+# 曾经的 bug：sign_consistency 未取负直接送进 auc_score，导致四个 alpha 的 AUC
+# 全部落在 0.30-0.38（正确值是它们的 1 - x，即 0.62-0.70）。
+# ---------------------------------------------------------------------------
+SIGNAL_DIRECTION: Dict[str, int] = {
+    "A_observable": +1,
+    "l2_to_median": +1,
+    "sign_consistency": -1,
+}
+
+
+def signal_direction(name: str) -> Tuple[int, bool]:
+    """返回 ``(direction, is_declared)``。
+
+    ``direction`` 为 +1/-1，乘到原始值上再送进 ``auc_score``。
+    ``is_declared`` 为 False 表示该信号没有显式声明极性、按 +1 处理 ——
+    调用方应当把这一点如实报告出来，而不是当作已知。
+
+    ``A_lambda_*``（lambda 敏感性分析的各列）与 ``A_observable`` 同向。
+    """
+    if name in SIGNAL_DIRECTION:
+        return SIGNAL_DIRECTION[name], True
+    if name.startswith("A_lambda_"):
+        return +1, True
+    return +1, False
 
 _GROUP_STYLE = {
     "real": ("正对照: 真实目标类图片", "tab:green", "o", "-"),
@@ -167,7 +203,18 @@ def summarize(raw_csv_glob, metric: str = "overlap") -> pd.DataFrame:
 def summarize_c(raw_csv_glob,
                 signals: Sequence[str] = ("A_observable", "l2_to_median",
                                           "sign_consistency")) -> pd.DataFrame:
-    """实验 C 的汇总：每个 ``(alpha, seed, signal)`` 区分良性/恶意的 AUC。"""
+    """实验 C 的汇总：每个 ``(alpha, seed, signal)`` 区分良性/恶意的 AUC。
+
+    每个信号先乘以 ``signal_direction()`` 给出的极性再算 AUC —— 见本模块顶部
+    ``SIGNAL_DIRECTION`` 的说明。列含义：
+
+    ``auc``
+        **修正极性后**的 AUC，这是应当被引用的数字。
+    ``auc_raw``
+        未修正的原始值，仅供追溯（对 direction=-1 的信号，``auc = 1 - auc_raw``）。
+    ``direction`` / ``direction_declared``
+        实际使用的极性，以及它是显式声明的还是按 +1 假定的。
+    """
     raw = load_raw(raw_csv_glob)
     rows = []
     for (alpha, seed), block in raw.groupby(["alpha", "seed"]):
@@ -175,9 +222,14 @@ def summarize_c(raw_csv_glob,
         for signal in signals:
             if signal not in block.columns:
                 continue
+            values = block[signal].to_numpy(dtype=float)
+            direction, declared = signal_direction(signal)
             rows.append({"alpha": float(alpha), "seed": int(seed),
                          "signal": signal,
-                         "auc": auc_score(block[signal].to_numpy(dtype=float), labels),
+                         "auc": auc_score(direction * values, labels),
+                         "auc_raw": auc_score(values, labels),
+                         "direction": direction,
+                         "direction_declared": declared,
                          "n_clients": int(len(block)),
                          "n_malicious": int(labels.sum())})
     return pd.DataFrame(rows)

@@ -62,7 +62,8 @@ class RunBundle:
 
     def __init__(self, cfg: Cfg, ckpt_dir: Optional[Path], device: torch.device,
                  smoke: bool, meta: Dict[str, Any], probe: ProbeSet,
-                 num_classes: int, train_dataset: Any = None):
+                 num_classes: int, train_dataset: Any = None,
+                 cache_models: bool = True):
         self.cfg = cfg
         self.ckpt_dir = ckpt_dir
         self.device = device
@@ -72,6 +73,10 @@ class RunBundle:
         self.num_classes = num_classes
         self.train_dataset = train_dataset
         self.target_class = int(meta["target_class"])
+        # cache_models=False 时只缓存生成器，客户端模型用完即弃。
+        # 100 个 resnet10 常驻约 2GB/bundle（exp_c 两个 bundle 近 4GB），
+        # 审计脚本要遍历全部客户端，必须能关掉这个缓存。
+        self.cache_models = bool(cache_models)
         self._cache: Dict[str, nn.Module] = {}
 
     def local_train_loader(self, record: Dict[str, Any]):
@@ -116,7 +121,8 @@ class RunBundle:
         model.to(self.device)
         model.device = self.device      # utils.evaluate_accuracy 依赖此属性
         model.eval()
-        self._cache[name] = model
+        if self.cache_models:
+            self._cache[name] = model
         return model
 
     def client_model(self, client_id: int) -> nn.Module:
@@ -217,7 +223,9 @@ def _fake_meta(cfg: Cfg) -> Dict[str, Any]:
             "clients": clients}
 
 
-def load_bundle(args: argparse.Namespace, cfg: Optional[Cfg] = None) -> RunBundle:
+def load_bundle(args: argparse.Namespace, cfg: Optional[Cfg] = None,
+                cache_models: bool = True,
+                dataset_sizes: Optional[Tuple[int, int]] = None) -> RunBundle:
     """从 CLI 参数装配 ``RunBundle``（加载 meta、建探针集）。"""
     cfg = cfg if cfg is not None else load_config(args.config)
     device = resolve_device(args.device)
@@ -232,7 +240,8 @@ def load_bundle(args: argparse.Namespace, cfg: Optional[Cfg] = None) -> RunBundl
         raise ValueError("必须提供 --ckpt-dir（或使用 --smoke）")
 
     num_classes = int(meta["num_classes"])
-    train_dataset, test_dataset, _ = build_datasets(cfg, smoke)
+    train_dataset, test_dataset, _ = build_datasets(
+        cfg, smoke, dataset_sizes=dataset_sizes or meta.get("synthetic_sizes"))
 
     probe_cfg = cfg.smoke.probe if smoke else cfg.probe
     probe_cfg = dict(probe_cfg)
@@ -241,7 +250,7 @@ def load_bundle(args: argparse.Namespace, cfg: Optional[Cfg] = None) -> RunBundl
                             {"probe": probe_cfg})
 
     return RunBundle(cfg, ckpt_dir, device, smoke, meta, probe, num_classes,
-                     train_dataset=train_dataset)
+                     train_dataset=train_dataset, cache_models=cache_models)
 
 
 def common_row(bundle: RunBundle, record: Dict[str, Any]) -> Dict[str, Any]:
