@@ -19,7 +19,50 @@ import matplotlib.pyplot as plt   # noqa: E402
 import numpy as np                # noqa: E402
 import pandas as pd               # noqa: E402
 
+
+# ---------------------------------------------------------------------------
+# 图中一律使用英文
+#
+# 出版用图不得出现中文。与其配一个 CJK 字体让中文"看起来正常"，不如让违规
+# 直接失败 —— 字体兜底只会把问题藏起来（默认的 DejaVu Sans 不含 CJK 字形，
+# 中文会渲染成方框 tofu，而且不报错）。
+# ``_finish`` 在保存前会扫描整张图的文字，发现 CJK 立即抛异常。
+# ---------------------------------------------------------------------------
+_CJK_RANGES = ((0x3000, 0x303F), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
+               (0xF900, 0xFAFF), (0xFF00, 0xFF65))
+
+
+def contains_cjk(text: str) -> bool:
+    """字符串里是否含中日韩字符（含全角标点）。"""
+    return any(any(low <= ord(ch) <= high for low, high in _CJK_RANGES)
+               for ch in str(text))
+
+
+def assert_no_cjk_in_figure(fig) -> None:
+    """扫描图中所有文字，发现 CJK 就抛 ``ValueError``。
+
+    覆盖 figure 级文字（``suptitle`` / ``supxlabel`` / ``fig.text``）、
+    以及每个 axes 的标题、坐标轴标签、刻度标签、图例与 ``ax.text`` 注释。
+    """
+    offenders = [text.get_text() for text in fig.texts
+                 if contains_cjk(text.get_text())]
+    for ax in fig.get_axes():
+        candidates = [ax.get_title(), ax.get_xlabel(), ax.get_ylabel()]
+        candidates += [label.get_text() for label in ax.get_xticklabels()]
+        candidates += [label.get_text() for label in ax.get_yticklabels()]
+        candidates += [child.get_text() for child in ax.texts]
+        legend = ax.get_legend()
+        if legend is not None:
+            candidates += [entry.get_text() for entry in legend.get_texts()]
+        offenders += [text for text in candidates if contains_cjk(text)]
+    if offenders:
+        raise ValueError(
+            "图中不允许出现中文，但发现: "
+            + "; ".join(repr(item) for item in dict.fromkeys(offenders)))
+
+
 __all__ = ["load_raw", "auc_score", "pearson_spearman", "mannwhitney",
+           "contains_cjk", "assert_no_cjk_in_figure",
            "SIGNAL_DIRECTION", "signal_direction",
            "summarize", "summarize_c", "summarize_d",
            "plot_a1", "plot_a2", "plot_a3", "plot_a4",
@@ -61,11 +104,11 @@ def signal_direction(name: str) -> Tuple[int, bool]:
     return +1, False
 
 _GROUP_STYLE = {
-    "real": ("正对照: 真实目标类图片", "tab:green", "o", "-"),
-    "delta_only": ("待测: 非目标类 + δ", "tab:red", "s", "-"),
-    "delta_plus_xi": ("待测: 非目标类 + δ + ξ", "tab:orange", "^", "-"),
-    "random_noise": ("负对照: 同预算随机噪声", "tab:gray", "x", "--"),
-    "xi_only": ("参考: 非目标类 + ξ", "tab:blue", "v", ":"),
+    "real": ("Positive control: real target-class images", "tab:green", "o", "-"),
+    "delta_only": ("Test: non-target + delta", "tab:red", "s", "-"),
+    "delta_plus_xi": ("Test: non-target + delta + xi", "tab:orange", "^", "-"),
+    "random_noise": ("Negative control: random noise, same budget", "tab:gray", "x", "--"),
+    "xi_only": ("Reference: non-target + xi", "tab:blue", "v", ":"),
 }
 
 
@@ -259,6 +302,7 @@ def summarize_d(raw_csv_glob) -> pd.DataFrame:
 def _finish(fig, out_path) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    assert_no_cjk_in_figure(fig)   # 出版用图不得含中文，违规直接失败
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -284,9 +328,9 @@ def plot_a1(summary: pd.DataFrame, out_path) -> Path:
                     marker=marker, linestyle=linestyle, capsize=3)
     ax.set_xticks(positions)
     ax.set_xticklabels([str(a) for a in alphas])
-    ax.set_xlabel("Dirichlet alpha（越往右异构度越高）")
-    ax.set_ylabel("跨客户端变异系数 CV(overlap)")
-    ax.set_title("图 A1: δ / 真实目标类 / 随机噪声 的跨客户端离散度")
+    ax.set_xlabel("Dirichlet alpha (heterogeneity increases to the right)")
+    ax.set_ylabel("Cross-client coefficient of variation, CV(overlap)")
+    ax.set_title("A1: cross-client dispersion of delta vs real target vs noise")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -313,12 +357,12 @@ def plot_a2(summary: pd.DataFrame, out_path,
                     color=style[1], marker=style[2], capsize=3)
     ax.axhline(0.0, color="black", linewidth=0.8)
     ax.axhline(0.1, color="crimson", linestyle=":", linewidth=0.8,
-               label="判据阈值 NG = 0.1")
+               label="Decision threshold NG = 0.1")
     ax.set_xticks(positions)
     ax.set_xticklabels([str(a) for a in alphas])
-    ax.set_xlabel("Dirichlet alpha（越往右异构度越高）")
-    ax.set_ylabel("自然度差距 NG(alpha)")
-    ax.set_title("图 A2: 自然度差距随异构度的变化")
+    ax.set_xlabel("Dirichlet alpha (heterogeneity increases to the right)")
+    ax.set_ylabel("Naturalness gap NG(alpha)")
+    ax.set_title("A2: naturalness gap vs heterogeneity")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -344,8 +388,8 @@ def plot_a3(raw: pd.DataFrame, out_path, group: str = "delta_plus_xi") -> Path:
     ax.set_xticks(positions)
     ax.set_xticklabels(labels)
     ax.set_xlabel("Dirichlet alpha")
-    ax.set_ylabel(f"overlap（组: {group}）")
-    ax.set_title("图 A3: overlap 在客户端间的分布")
+    ax.set_ylabel(f"overlap (group: {group})")
+    ax.set_title("A3: distribution of overlap across clients")
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
 
@@ -366,9 +410,9 @@ def plot_a4(raw, out_path, group: str = "delta_plus_xi") -> Path:
         ax.scatter(sub["n_target_samples_local"], sub["overlap"], s=18,
                    alpha=0.7, label=f"alpha={alpha}")
     r, rho = pearson_spearman(block["n_target_samples_local"], block["overlap"])
-    ax.set_xlabel("该客户端【本地】目标类样本数")
-    ax.set_ylabel(f"overlap（组: {group}，在共享探针集上测量）")
-    ax.set_title(f"图 A4: 混杂/机制控制  Pearson r={r:.3f}, Spearman ρ={rho:.3f}")
+    ax.set_xlabel("Local target-class sample count of the client")
+    ax.set_ylabel(f"overlap (group: {group}, measured on shared probe set)")
+    ax.set_title(f"A4: confounder / mechanism control  Pearson r={r:.3f}, Spearman rho={rho:.3f}")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -378,15 +422,15 @@ def plot_c1(raw, out_path) -> Path:
     """图 C1（主图）：散点 ``E_k`` vs ``A^(k)``，良性/恶意分色。"""
     raw = load_raw(raw)
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for is_malicious, color, label in ((False, "tab:blue", "良性客户端"),
-                                       (True, "tab:red", "恶意客户端")):
+    for is_malicious, color, label in ((False, "tab:blue", "Benign clients"),
+                                       (True, "tab:red", "Malicious clients")):
         sub = raw[raw["is_malicious"].astype(bool) == is_malicious]
         ax.scatter(sub["A_observable"], sub["E"], s=22, alpha=0.75,
                    color=color, label=label)
     r, rho = pearson_spearman(raw["A_observable"], raw["E"])
-    ax.set_xlabel("可观测量 A^(k)（仅用类原型 + 分类头）")
-    ax.set_ylabel("超额响应 E_k = ASR_k - NatRate_k（ground truth）")
-    ax.set_title(f"图 C1: 可观测量与真实后门强度  Pearson r={r:.3f}, Spearman ρ={rho:.3f}")
+    ax.set_xlabel("Observable A^(k) (class prototypes + classifier head only)")
+    ax.set_ylabel("Excess response E_k = ASR_k - NatRate_k (ground truth)")
+    ax.set_title(f"C1: observable vs true backdoor strength  Pearson r={r:.3f}, Spearman rho={rho:.3f}")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -395,9 +439,9 @@ def plot_c1(raw, out_path) -> Path:
 def plot_c2(summary: pd.DataFrame, out_path) -> Path:
     """图 C2（最终写进论文的那张）：三条信号的 AUC 随 alpha 的变化。"""
     style = {
-        "A_observable": ("A^(k)（本方法：边距矩阵）", "tab:red", "o", "-"),
-        "l2_to_median": ("参数 L2 距中位数（Krum / FLAME 类）", "tab:blue", "s", "--"),
-        "sign_consistency": ("梯度符号一致性（Invariant Aggregator 类）",
+        "A_observable": ("A^(k) (ours: margin matrix)", "tab:red", "o", "-"),
+        "l2_to_median": ("Param L2 to median (Krum / FLAME family)", "tab:blue", "s", "--"),
+        "sign_consistency": ("Gradient sign consistency (Invariant Aggregator)",
                              "tab:green", "^", ":"),
     }
     fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -414,13 +458,13 @@ def plot_c2(summary: pd.DataFrame, out_path) -> Path:
             errors.append(values.std(ddof=1) if len(values) > 1 else 0.0)
         ax.errorbar(positions, means, yerr=errors, label=label, color=color,
                     marker=marker, linestyle=linestyle, capsize=3)
-    ax.axhline(0.5, color="black", linewidth=0.8, label="随机猜测")
+    ax.axhline(0.5, color="black", linewidth=0.8, label="Chance")
     ax.set_xticks(positions)
     ax.set_xticklabels([str(a) for a in alphas])
     ax.set_ylim(0.0, 1.02)
-    ax.set_xlabel("Dirichlet alpha（越往右异构度越高）")
-    ax.set_ylabel("区分良性/恶意的 AUC")
-    ax.set_title("图 C2: 三种信号在不同异构度下的检测能力")
+    ax.set_xlabel("Dirichlet alpha (heterogeneity increases to the right)")
+    ax.set_ylabel("AUC separating benign from malicious")
+    ax.set_title("C2: detection power of three signals vs heterogeneity")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -443,7 +487,7 @@ def plot_c3(raw, out_path) -> Path:
     ax.axhline(0.5, color="black", linewidth=0.8)
     ax.set_xlabel("lambda_std")
     ax.set_ylabel("AUC")
-    ax.set_title("图 C3: A^(k) 对 lambda 的敏感性")
+    ax.set_title("C3: sensitivity of A^(k) to lambda")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)
@@ -463,15 +507,15 @@ def plot_d1(raw, out_path, poisoned_source_classes: Optional[Iterable[int]] = No
 
     def _bucket(class_id: int) -> str:
         if class_id in target_classes:
-            return "目标类"
+            return "Target class"
         if class_id in poisoned:
-            return "被投毒源类"
-        return "其余类"
+            return "Poisoned source classes"
+        return "Other classes"
 
     raw = raw.copy()
     raw["bucket"] = raw["class_id"].map(_bucket)
 
-    buckets = ["目标类", "被投毒源类", "其余类"]
+    buckets = ["Target class", "Poisoned source classes", "Other classes"]
     buckets = [b for b in buckets if (raw["bucket"] == b).any()]
     datasets, positions, tick_positions, tick_labels, colors = [], [], [], [], []
     for index, bucket in enumerate(buckets):
@@ -499,8 +543,8 @@ def plot_d1(raw, out_path, poisoned_source_classes: Optional[Iterable[int]] = No
     ax.axhline(0.0, color="black", linewidth=0.8)
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels)
-    ax.set_ylabel("v = log(J / 良性中位数)")
-    ax.set_title("图 D1: 类内散度异常（蓝=良性，红=恶意）")
+    ax.set_ylabel("v = log(J / benign median)")
+    ax.set_title("D1: within-class scatter anomaly (blue = benign, red = malicious)")
     ax.grid(alpha=0.3, axis="y")
     return _finish(fig, out_path)
 
@@ -518,14 +562,14 @@ def plot_d2(summary: pd.DataFrame, out_path) -> Path:
         errors.append(values.std(ddof=1) if len(values) > 1 else 0.0)
     ax.errorbar(positions, means, yerr=errors, marker="o", color="tab:purple",
                 capsize=3, label="max_c v_c^(k)")
-    ax.axhline(0.5, color="black", linewidth=0.8, label="随机猜测")
-    ax.axhline(0.7, color="crimson", linestyle=":", linewidth=0.8, label="判据阈值 0.7")
+    ax.axhline(0.5, color="black", linewidth=0.8, label="Chance")
+    ax.axhline(0.7, color="crimson", linestyle=":", linewidth=0.8, label="Threshold 0.7")
     ax.set_xticks(positions)
     ax.set_xticklabels([str(a) for a in alphas])
     ax.set_ylim(0.0, 1.02)
     ax.set_xlabel("Dirichlet alpha")
     ax.set_ylabel("AUC")
-    ax.set_title("图 D2: 类内散度异常的检测能力")
+    ax.set_title("D2: detection power of the within-class scatter anomaly")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     return _finish(fig, out_path)

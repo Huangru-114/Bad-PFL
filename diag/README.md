@@ -47,6 +47,9 @@
 | `exp_d.py` | 实验 D：源类表征混乱 | `run_exp_d` | CLI |
 | `analysis.py` | 汇总与绘图 | `summarize`, `summarize_c`, `summarize_d`, `plot_a1..a4`, `plot_c1..c3`, `plot_d1..d2`, `auc_score`, `pearson_spearman`, `mannwhitney` | CLI, `run_matrix` |
 | `run_matrix.py` | 24 组扫描的命令生成器（**默认 dry-run**） | `build_commands` | CLI |
+| `exp_e_precheck.py` | 实验 E 的 Phase 0 校验（干净分支 / 划分一致性 / E1-E2 就绪 / 参数哈希） | `check_clean_branch`, `check_partition_consistency` | CLI |
+| `exp_e.py` | 实验 E：对抗地板测定，四个 cell（E1-E4） | `run_cell`, `evaluate_mode`, `build_exp_e_probe`, `train_oracle_generator` | CLI |
+| `analysis_e.py` | 实验 E 的汇总与三张图 | `summarize_e`, `decomposition_e`, `classify_floor`, `plot_e1..e3` | CLI |
 
 ### 测试
 
@@ -60,6 +63,9 @@
 | `tests/test_eval_loader.py` | **`drop_last` 回归测试** |
 | `tests/test_hooks.py` | `verify_partition_consistency` 逐字段的漏报测试、深拷贝、生成器提取 |
 | `tests/test_analysis.py` | 汇总数学 + 全部绘图函数在合成数据上跑通 |
+| `tests/test_audit.py` | P0 排查工具：泄漏 monkey-patch、数据集重建守卫、Markdown 转义 |
+| `tests/test_exp_e.py` | 实验 E：双指标的分子分母、real_target 空分母、E3 不污染 clean 模型 |
+| `tests/test_analysis_e.py` | 实验 E 的汇总与绘图 + **「图中禁止中文」的强制检查** |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -176,6 +182,13 @@ python -m diag.run_matrix                # 打印 85 条命令，不执行
 python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 # python -m diag.run_matrix --execute    # 真正执行（本次任务不要用）
 ```
+
+### 3.6b 图的语言约定
+
+**所有图中一律使用英文。** `diag/analysis.py::_finish` 在保存前会扫描整张图的
+文字（含 figure 级的 `supxlabel` / `suptitle`），发现中日韩字符直接抛
+`ValueError`。这是刻意选择：配一个 CJK 字体只会让违规"看起来正常"，
+而 matplotlib 默认的 DejaVu Sans 不含 CJK 字形，中文会静默渲染成方框。
 
 ### 3.7 跑测试
 
