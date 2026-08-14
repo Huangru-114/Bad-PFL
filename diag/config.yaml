@@ -21,7 +21,7 @@ fl:
   local_steps: 15            # 注意：是 step 数不是 epoch 数
   batch_size: 32
   learning_rate: 0.1
-  total_round: 300
+  total_round: 1000
   poison_rate: 0.2
   pfl: fedbn                 # 本仓库唯一实现的 PFL 方法
 
@@ -29,8 +29,8 @@ fl:
 # 正式扫描矩阵。run_matrix.py 读取；本次任务不执行。
 # ---------------------------------------------------------------------------
 sweep:
-  alpha: [1.0, 0.5, 0.1, 0.05]
-  seed: [0, 1, 2]
+  alpha: [0.5]
+  seed: [0]
   mode: [clean, attack]
 
 # ---------------------------------------------------------------------------
