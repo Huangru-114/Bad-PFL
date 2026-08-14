@@ -89,7 +89,13 @@ $ git diff --stat main -- . ':(exclude)diag'
 
 ## 二、只读埋点（不改变任何行为）
 
-### H1. checkpoint 与元数据保存
+> **命名说明**：本节用「埋点 1–4」编号。
+> 不要与 `H1/H2/H3` 混淆 —— 那三个是**科学假设**的编号
+> （H1 = δ 的跨环境不变性，H2 = ξ 的散度痕迹，H3 = 可观测性），
+> 定义在任务书里，出现在 `exp_a.py` / `exp_c.py` / `exp_d.py` 的 docstring 中。
+> 早先本节误用了 H1–H4，造成过一次实际的误读。
+
+### 埋点 1. checkpoint 与元数据保存
 
 - **接入点**：`event_emitter.fl_event_emitter` 的 `on_fl_end` 事件。
 - **为什么零侵入**：`fl_process.basic_fl_process` 本来就发射了 6 个事件
@@ -101,13 +107,13 @@ $ git diff --stat main -- . ':(exclude)diag'
   所以 `save_state_dict` 深拷贝到 CPU 后才落盘
   （回归测试 `test_hooks.py::test_save_state_dict_is_detached_cpu_copy`）。
 
-### H2. 参与轮次计数
+### 埋点 2. 参与轮次计数
 
 - **接入点**：`on_client_begin` 事件（`fl_process.py:22`）。
 - **行为**：只对客户端对象上一个自定义属性 `diag_n_participations` 做自增。
 - **训练结束后注销**（`diag/run_fl.py` 的 `finally` 块），避免跨 run 污染。
 
-### H3. 生成器提取
+### 埋点 3. 生成器提取
 
 - **实现**：`diag/hooks.py::extract_generator`。
 - **做法**：`fba.use_our_attack`（`fba.py:25-66`）只返回 `eval_func`，把
@@ -116,7 +122,7 @@ $ git diff --stat main -- . ':(exclude)diag'
   `RuntimeError`，便于定位 —— 刻意不做静默回退
   （回归测试 `test_hooks.py::test_extract_generator_reports_actual_freevars_on_failure`）。
 
-### H4. 客户端自定义属性
+### 埋点 4. 客户端自定义属性
 
 在 `diag/run_fl.py` 里给客户端对象附加了以下属性，全部以 `diag_` 或明确语义命名，
 **不与原仓库的任何属性重名**：

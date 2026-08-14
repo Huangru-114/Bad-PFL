@@ -192,3 +192,95 @@ def test_extract_generator_finds_real_generator():
         return our_poison_func
 
     assert isinstance(extract_generator(make_good()), nn.Module)
+
+
+# ---------------------------------------------------------------------------
+# 实验 E 新增的埋点
+# ---------------------------------------------------------------------------
+def test_state_dict_hash_is_stable_and_sensitive():
+    """E3 靠这个哈希证明 clean_model 没被现训生成器污染（陷阱清单第 7 条）。"""
+    from diag.hooks import state_dict_hash
+
+    model = nn.Linear(6, 4)
+    first = state_dict_hash(model)
+    assert state_dict_hash(model) == first, "同一模型必须给出相同哈希"
+
+    with torch.no_grad():
+        model.weight[0, 0] += 1e-7
+    assert state_dict_hash(model) != first, "极小的权重改动也必须被检出"
+
+
+def test_state_dict_hash_ignores_integer_buffers():
+    """num_batches_tracked 是整型 buffer，不应影响哈希。"""
+    from diag.hooks import state_dict_hash
+
+    model = nn.BatchNorm1d(4)
+    before = state_dict_hash(model)
+    model.num_batches_tracked += 5
+    assert state_dict_hash(model) == before
+
+
+def test_save_generator_meta_writes_required_keys():
+    from diag.hooks import save_generator_meta
+
+    payload = {"target_label": 0, "epsilon": 4 / 255, "sigma": 4 / 255,
+               "total_rounds": 300, "seed": 0, "alpha": 0.5,
+               "run_id": "attack_a0.5_s0"}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = save_generator_meta(tmp, payload)
+        loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert loaded == payload
+    assert set(loaded) >= {"target_label", "epsilon", "sigma", "total_rounds",
+                           "seed", "alpha", "run_id"}
+
+
+def test_generator_checkpoint_hook_fires_on_interval():
+    """每 N 轮存一次，文件名含轮次；其余轮次不产生文件。"""
+    from event_emitter import fl_event_emitter
+
+    from diag.hooks import attach_generator_checkpoint_hook
+
+    generator = nn.Conv2d(3, 3, 1)
+    with tempfile.TemporaryDirectory() as tmp:
+        handler = attach_generator_checkpoint_hook(lambda: generator, tmp,
+                                                   every_n_rounds=3)
+        try:
+            for cur_round in range(1, 8):
+                fl_event_emitter.emit("on_round_end", cur_round=cur_round)
+        finally:
+            fl_event_emitter.off("on_round_end", handler)
+        saved = sorted(p.name for p in Path(tmp).glob("generator_round*.pt"))
+    assert saved == ["generator_round0003.pt", "generator_round0006.pt"], saved
+
+
+def test_generator_checkpoint_hook_disabled_when_interval_not_positive():
+    from event_emitter import fl_event_emitter
+
+    from diag.hooks import attach_generator_checkpoint_hook
+
+    generator = nn.Conv2d(3, 3, 1)
+    with tempfile.TemporaryDirectory() as tmp:
+        handler = attach_generator_checkpoint_hook(lambda: generator, tmp,
+                                                   every_n_rounds=0)
+        try:
+            for cur_round in range(1, 5):
+                fl_event_emitter.emit("on_round_end", cur_round=cur_round)
+        finally:
+            fl_event_emitter.off("on_round_end", handler)
+        assert list(Path(tmp).glob("*.pt")) == []
+
+
+def test_generator_checkpoint_hook_tolerates_missing_generator():
+    """clean run 没有生成器时 getter 返回 None，不应崩。"""
+    from event_emitter import fl_event_emitter
+
+    from diag.hooks import attach_generator_checkpoint_hook
+
+    with tempfile.TemporaryDirectory() as tmp:
+        handler = attach_generator_checkpoint_hook(lambda: None, tmp,
+                                                   every_n_rounds=1)
+        try:
+            fl_event_emitter.emit("on_round_end", cur_round=1)
+        finally:
+            fl_event_emitter.off("on_round_end", handler)
+        assert list(Path(tmp).glob("*.pt")) == []

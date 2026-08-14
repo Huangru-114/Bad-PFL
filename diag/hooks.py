@@ -33,7 +33,9 @@ from event_emitter import fl_event_emitter
 __all__ = ["run_dir_name", "save_state_dict", "load_checkpoint", "save_run",
            "attach_save_hook", "build_client_meta",
            "verify_partition_consistency", "extract_generator",
-           "load_client_model", "load_meta", "flatten_state_dict"]
+           "load_client_model", "load_meta", "flatten_state_dict",
+           "state_dict_hash", "save_generator_meta",
+           "attach_generator_checkpoint_hook"]
 
 
 def load_checkpoint(path) -> Dict[str, torch.Tensor]:
@@ -159,6 +161,70 @@ def save_run(ckpt_dir, server: Any, clients: Any, meta: Dict[str, Any],
     with open(ckpt_dir / "meta.json", "w", encoding="utf-8") as handle:
         json.dump(meta, handle, indent=2, ensure_ascii=False)
     return ckpt_dir
+
+
+def state_dict_hash(module: nn.Module) -> str:
+    """模型参数的稳定哈希，用于证明某段代码**没有**改动模型。
+
+    实验 E 的 E3 要在干净模型上现训生成器，必须保证 ``clean_model`` 的参数
+    在训练前后完全不变（陷阱清单第 7 条）。比对本函数的返回值即可。
+
+    只纳入浮点张量，按键名排序，转成 CPU float64 后取 blake2b —— 与设备、
+    dtype 无关，可跨机器比对。
+    """
+    import hashlib
+
+    digest = hashlib.blake2b(digest_size=16)
+    for key in sorted(module.state_dict().keys()):
+        value = module.state_dict()[key]
+        if not torch.is_tensor(value) or not value.dtype.is_floating_point:
+            continue
+        digest.update(key.encode("utf-8"))
+        digest.update(value.detach().cpu().double().numpy().tobytes())
+    return digest.hexdigest()
+
+
+def save_generator_meta(ckpt_dir, meta: Dict[str, Any]) -> Path:
+    """写 ``generator_meta.json``。
+
+    记录 ``{target_label, epsilon, sigma, total_rounds, seed, alpha, run_id}``，
+    使任何一份生成器 checkpoint 都能独立追溯到它的训练条件。
+    """
+    ckpt_dir = Path(ckpt_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    path = ckpt_dir / "generator_meta.json"
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(meta, handle, indent=2, ensure_ascii=False)
+    return path
+
+
+def attach_generator_checkpoint_hook(generator_getter: Callable[[], Optional[nn.Module]],
+                                     ckpt_dir, every_n_rounds: int = 50) -> Callable:
+    """每 N 轮保存一次生成器（文件名含轮次），挂在既有的 ``on_round_end`` 上。
+
+    为什么不改 ``fba.py``：``use_our_attack`` 把 ``trigger_gen`` 留在闭包里，
+    ``extract_generator`` 已能只读取出该实例；再借 ``fl_process`` 本就发射的
+    ``on_round_end`` 事件落盘即可。**对原仓库文件零改动，且不触碰梯度图**
+    （``save_state_dict`` 内部 ``detach().cpu().clone()``）。
+
+    ``every_n_rounds <= 0`` 时只在训练结束保存 final（由 ``save_run`` 负责）。
+    返回注册的 handler，便于 ``fl_event_emitter.off`` 注销。
+    """
+    ckpt_dir = Path(ckpt_dir)
+
+    def handler(**kwargs):
+        if every_n_rounds <= 0:
+            return
+        cur_round = int(kwargs["cur_round"])
+        if cur_round % int(every_n_rounds) != 0:
+            return
+        generator = generator_getter()
+        if generator is None:
+            return
+        save_state_dict(generator, ckpt_dir / f"generator_round{cur_round:04d}.pt")
+
+    fl_event_emitter.on("on_round_end", handler)
+    return handler
 
 
 def attach_save_hook(ckpt_dir, meta_builder: Callable[[], Dict[str, Any]],

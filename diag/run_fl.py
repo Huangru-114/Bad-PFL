@@ -45,7 +45,9 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 from . import REPO_ROOT  # noqa: F401  (副作用：把仓库根目录加入 sys.path)
 from .config import Cfg, load_config, make_select_rule, set_all_seeds
-from .hooks import (build_client_meta, extract_generator, run_dir_name, save_run)
+from .hooks import (attach_generator_checkpoint_hook, build_client_meta,
+                    extract_generator, run_dir_name, save_generator_meta,
+                    save_run)
 
 from client import BasicClient, PoisonClient
 from event_emitter import fl_event_emitter
@@ -258,9 +260,19 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     # --- 5. 攻击配置（唯一的模式差异） ------------------------------------
     generator = None
     eval_func = None
+    generator_handler = None
+    ckpt_root = Path(ckpt_root or cfg.paths.ckpt_root)
+    ckpt_dir = ckpt_root / run_dir_name(mode, alpha, seed)
     if mode == "attack":
+        # clean run 完全跳过 use_our_attack —— 不是构造空的攻击对象。
+        # 原实现在没有 PoisonClient 时会 UnboundLocalError（eval_func 未赋值），
+        # 见 fba.py:60-66；跳过是唯一正确的处理方式。
         eval_func = use_our_attack(clients, server, target_class, poison_rate)
         generator = extract_generator(eval_func)
+        every = int(cfg.exp_e.get("generator_ckpt_every", 0)) if "exp_e" in cfg else 0
+        if every > 0:
+            generator_handler = attach_generator_checkpoint_hook(
+                lambda: generator, ckpt_dir / "generator", every_n_rounds=every)
 
     # --- 6. 参与轮次计数（纯只读埋点，挂在既有事件上） --------------------
     def count_participation(**kwargs):
@@ -276,11 +288,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
                          training_rounds=total_round, select_rule=select_rule)
     finally:
         fl_event_emitter.off("on_client_begin", count_participation)
+        if generator_handler is not None:
+            fl_event_emitter.off("on_round_end", generator_handler)
 
     # --- 8. 保存 ----------------------------------------------------------
-    ckpt_root = Path(ckpt_root or cfg.paths.ckpt_root)
-    ckpt_dir = ckpt_root / run_dir_name(mode, alpha, seed)
-
     train_labels_by_client = {i: train_labels[train_indices[i]] for i in range(client_num)}
     test_labels_by_client = {i: test_labels[test_indices[i]] for i in range(client_num)}
     meta = {
@@ -311,6 +322,17 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         ).to(torch_device)
 
     save_run(ckpt_dir, server, clients, meta, generator, reference_batch)
+    if generator is not None:
+        # 让任何一份生成器 checkpoint 都能独立追溯到它的训练条件。
+        save_generator_meta(ckpt_dir / "generator", {
+            "target_label": target_class,
+            "epsilon": float(cfg.perturb.eps_xi),
+            "sigma": float(cfg.perturb.eps_delta),
+            "total_rounds": total_round,
+            "seed": int(seed),
+            "alpha": float(alpha),
+            "run_id": run_dir_name(mode, alpha, seed),
+        })
     print(f"[run_fl] mode={mode} alpha={alpha} seed={seed} -> {ckpt_dir}")
     return ckpt_dir
 
