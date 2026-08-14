@@ -33,7 +33,8 @@
 
 | 文件 | 说明 | 主要公开接口 | 被谁调用 |
 |---|---|---|---|
-| `hooks.py` | checkpoint 保存 + 对照组校验 + 生成器提取 | `save_run`, `attach_save_hook`, `build_client_meta`, `verify_partition_consistency`, `extract_generator`, `flatten_state_dict`, `run_dir_name` | `run_fl`, `exp_c`, `run_matrix` |
+| `hooks.py` | checkpoint 保存 + 对照组校验 + 生成器提取 + 逐位比对 | `save_run`, `attach_save_hook`, `build_client_meta`, `verify_partition_consistency`, `extract_generator`, `flatten_state_dict`, `run_dir_name`, `hash_state`, `state_dict_hash`, `compare_run_checkpoints` | `run_fl`, `exp_c`, `exp_f`, `run_matrix` |
+| `snapshots.py` | **按轮次的快照埋点**（实验 F） | `SnapshotRecorder`, `build_grid`, `select_snapshot_clients`, `available_rounds`, `load_manifest` | `run_fl`, `exp_f` |
 | `run_fl.py` | **诊断用 FL 训练驱动**（clean / attack） | `run_fl`, `build_datasets`, `SyntheticImageDataset` | CLI, `exp_common`, 冒烟测试 |
 
 ### 实验驱动与分析
@@ -50,6 +51,9 @@
 | `exp_e_precheck.py` | 实验 E 的 Phase 0 校验（干净分支 / 划分一致性 / E1-E2 就绪 / 参数哈希） | `check_clean_branch`, `check_partition_consistency` | CLI |
 | `exp_e.py` | 实验 E：对抗地板测定，四个 cell（E1-E4） | `run_cell`, `evaluate_mode`, `build_exp_e_probe`, `train_oracle_generator` | CLI |
 | `analysis_e.py` | 实验 E 的汇总与三张图 | `summarize_e`, `decomposition_e`, `classify_floor`, `plot_e1..e3` | CLI |
+| `exp_f_precheck.py` | 实验 F 的 Phase 0（快照盘点 / **FedBN 全局模型 BN 诊断** / 三方 clean acc / 重跑成本） | `inventory_snapshots`, `diagnose_global_bn`, `measure_clean_acc`, `estimate_rerun_cost` | CLI |
+| `exp_f.py` | 实验 F：冻结生成器的时间衰减矩阵（上三角 s × t） | `run_matrix`, `FrozenGenerator`, `compute_delta`, `make_frozen_xi_fn`, `load_snapshot_model` | CLI |
+| `analysis_f.py` | 实验 F 的汇总与三张图 | `summarize_f`, `matrix_pivot`, `decay_table`, `classify_decay`, `plot_f1..f3` | CLI |
 
 ### 测试
 
@@ -161,6 +165,32 @@ python -m diag.exp_d --ckpt-dir checkpoints/attack_a0.5_s0 \
                      --out results/raw/expD_a0.5_s0.csv
 ```
 
+#### 实验 F：冻结生成器的时间衰减矩阵
+
+**前提**：需要按轮次的快照。attack run 必须带 `--snapshot-every` 跑过，
+否则模型侧一个中间轮次都没有（`save_run` 只在训练结束调用一次）。
+
+```bash
+# P0：核查快照可用性 + FedBN 全局模型的 BN 诊断
+python -m diag.exp_f_precheck --ckpt-root ./checkpoints --out F0_PRECHECK.md
+
+# P1：带快照埋点重跑 attack run（--verify-against 证明埋点没改变训练动力学）
+python -m diag.run_fl --mode attack --alpha 0.5 --seed 0 \
+       --snapshot-every 50 \
+       --verify-against ./checkpoints/attack_a0.5_s0
+
+# P2：稀疏矩阵（5 个点 = 15 格上三角，仅 delta_only、仅个性化模型）
+python -m diag.exp_f --ckpt-root ./checkpoints --alpha 0.5 --seed 0 \
+       --sparse --modes delta_only --eval-targets personalized
+
+# P3：完整矩阵 + 其余扰动模式 + 借-BN 全局模型
+python -m diag.exp_f --ckpt-root ./checkpoints --alpha 0.5 --seed 0 \
+       --modes delta_only full_xi_frozen full_xi_fresh
+
+# P4：三张图 + 判据
+python -m diag.analysis_f --raw-glob "results/raw/exp_f_matrix_*.csv"
+```
+
 ### 3.5 汇总与绘图
 
 ```bash
@@ -222,6 +252,13 @@ python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 | `metrics.min_class_count` | **本地**类原型的有效性阈值 | 5 | C |
 | `perturb.eps_delta` / `eps_xi` | L∞ 预算，均为 4/255 | 对齐 `fba.py` | A/B/C |
 | `perturb.xi_seed` / `noise_seed` | 固定 ξ 与随机噪声 | 任意整数 | A/B/C |
+| `exp_e.*` | 实验 E 的探针规模、随机重复次数、E3 现训生成器协议 | 见文件 | E |
+| `exp_f.snapshot_every` | 按轮次快照的网格间隔 | 50（1000 轮 → 20 点） | F |
+| `exp_f.snapshot_n_benign` / `n_malicious` | 逐轮保存本地模型的客户端数 | 10 / 2 | F |
+| `exp_f.grid_sparse` | P2 的稀疏网格 | `[200,…,1000]` | F |
+| `exp_f.modes_p2` / `modes_full` / `modes_per_t` | 矩阵模式与只随 t 变的模式 | 见文件 | F |
+| `exp_f.eval_targets` | `personalized`（主）/ `global_bn_borrowed`（副） | 见下方 §4b | F |
+| `exp_f.mature_s_threshold` | §3.3 判据只看 `s >=` 该值 | 500 | F |
 | `determinism.select_rule_seed_offset` | 客户端采样 RNG 的种子偏移 | 10000 | 训练 |
 
 **已删除的字段**：`metrics.min_target_samples`。改用共享探针集后所有客户端都能
@@ -236,6 +273,37 @@ python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 
 探针集使用**独立**的 `np.random.RandomState(probe.seed)`，不触碰全局 numpy RNG
 （有测试保证），因此构造探针集不会扰动数据划分。
+
+---
+
+## 4b. ⚠️ FedBN 下全局模型的 BN 永不更新
+
+这条是在做实验 F 的 Phase 0 时从代码里查出来的，**会影响已有结果的解读**。
+
+`pfl.py:5-12` 的 `fedbn_update` 挂在 `before_update_global` 阶段，把所有含
+`bn` 或 `shortcut.1` 的键从 `server.update` 里 `pop` 掉；随后 `server.py:34`
+的 `load_state_dict(self.update, strict=False)` 就再也碰不到 BN。
+ResNet 的 BN 键全部匹配这两个模式（`resnet.py:22,25,32`）。
+
+**结果：`global.pt` 的 BN 权重与 running stats 从初始化起 1000 轮一位没变**
+（weight=1, bias=0, running_mean=0, running_var=1, num_batches_tracked=0）。
+
+这**不是 bug**，是 FedBN 的固有语义 —— 个性化模型 = 共享参数 + 各自私有 BN，
+全局模型本来就不是一个可以单独拿来用的东西。但它有两个直接后果：
+
+1. **实验 F 的主评估对象不能是 `global.pt`。** 改为：
+   - 主：`personalized` —— 抽样良性客户端的本地模型，与论文的 ASR 定义、
+     与实验 E 的协议一致；
+   - 副：`global_bn_borrowed` —— 全局共享参数 + 固定良性客户端的 BN。
+     BN 供体的选择本身是一个自由度，CSV 里如实记录。
+2. **实验 E 的 E4 需要重测。** E4 用 `attack_dir/global.pt` 作黑盒 ξ 模型
+   （`exp_e.py:406`），得到 ASR=0.0312。这个数字里有多少来自"黑盒迁移困难"、
+   多少来自"模型本身失配"，取决于该全局模型的 clean accuracy ——
+   `exp_f_precheck.measure_clean_acc` 会把这个数字直接测出来。
+   **在拿到那个数字之前，E4 的结论不作数。**
+
+验证方式（不依赖任何推断）：`exp_f_precheck.diagnose_global_bn` 直接读盘断言
+全部 BN 条目等于初始化值，并逐条打印实测值。
 
 ---
 
@@ -327,9 +395,25 @@ python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 
 ---
 
+### 5.6 实验 F 特有的限制
+
+| 项 | 状态 |
+|---|---|
+| 单 (α=0.5, seed=0) 单点 | 无法区分真实效应与单次抽样偶然 |
+| 客户端快照的 staleness | FedBN 下客户端只在参与的轮次更新本地模型，网格点的快照取自其后的**首次参与**，典型滞后 0–10 轮。已作为 `staleness` 列如实记录，但它与 `gap` 的效应**无法完全解耦** |
+| 借-BN 全局模型的供体选择 | 任选一个良性客户端，这本身是一个自由度 |
+| P2 稀疏网格取不到 `gap=500` | 步长 200 的网格只有 200 的倍数，§3.3 的 H_stable 侧判据在 P2 上必然返回"未能确定"。这是网格的真实限制，**绝不用插值补**（陷阱 8），有 `test_sparse_grid_cannot_reach_the_stable_gap` 固定住这个行为 |
+| 重跑与旧 run 的一致性 | 已在冒烟规模上实证：开/关快照埋点的两次 run **逐位一致**。GPU + 1000 轮的真实规模上仍需用 `--verify-against` 复核；若不一致，实验 E 与 F 的结果**不可混用**，须在新 run 上重算 E |
+
+---
+
 ## 6. 下一步需要人工确认的事项
 
 按重要性排序：
+
+0. **⭐ 实验 E 的 E4 需要重测**（§4b）。它用的 `global.pt` 在 FedBN 下 BN 从未
+   更新过。先跑 `exp_f_precheck` 拿到该模型的 clean accuracy，再决定 E4 的
+   0.0312 有多少是"黑盒迁移困难"、多少是"模型失配"。
 
 1. **⭐ ξ 的绑定模型是否就此定案。**
    当前按"原有逻辑"绑定被评估的模型，代价是实验 A 的离散度无法干净归因给 δ
@@ -365,8 +449,9 @@ pandas 3.0.5 / scipy 1.17.1 / matplotlib 3.11.1 / pyyaml 6.0.1
 # torchvision: 未安装（正式实验必需）
 # pytest: 未安装（用 diag/tests/run_tests.py 代替）
 
-# 单元测试（94 个，约 5 秒）
+# 单元测试（190 个，约 70 秒）
 python -m diag.tests.run_tests
+python -m diag.tests.run_tests exp_f      # 只跑某个模块
 
 # 集成冒烟测试（约 1 分钟，全 CPU）
 python -m diag.tests.smoke_integration --workdir /tmp/diag_smoke --keep
@@ -374,6 +459,11 @@ python -m diag.tests.smoke_integration --workdir /tmp/diag_smoke --keep
 # 确认原仓库文件零改动
 git diff --stat main -- . ':(exclude)diag'
 ```
+
+实验 F 的快照埋点另有一项端到端验证：同一 seed 分别跑
+`--snapshot-every 1` 与 `--snapshot-every 0`，用 `--verify-against` 比对，
+应当**逐位一致**（已在冒烟规模上通过，6/6 个 checkpoint 哈希相同）。
+这是"埋点只做 I/O、不改变训练动力学"这条主张的实证，不是口头保证。
 
 冒烟测试使用 `config.yaml` 的 `smoke` 段：4 客户端 / 1 个恶意 / 2 轮 /
 每客户端 64 样本 / batch 16 / CPU / seed 0 / alpha 0.5。

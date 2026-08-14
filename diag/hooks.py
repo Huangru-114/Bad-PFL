@@ -34,8 +34,8 @@ __all__ = ["run_dir_name", "save_state_dict", "load_checkpoint", "save_run",
            "attach_save_hook", "build_client_meta",
            "verify_partition_consistency", "extract_generator",
            "load_client_model", "load_meta", "flatten_state_dict",
-           "state_dict_hash", "save_generator_meta",
-           "attach_generator_checkpoint_hook"]
+           "hash_state", "state_dict_hash", "compare_run_checkpoints",
+           "save_generator_meta", "attach_generator_checkpoint_hook"]
 
 
 def load_checkpoint(path) -> Dict[str, torch.Tensor]:
@@ -163,11 +163,8 @@ def save_run(ckpt_dir, server: Any, clients: Any, meta: Dict[str, Any],
     return ckpt_dir
 
 
-def state_dict_hash(module: nn.Module) -> str:
-    """模型参数的稳定哈希，用于证明某段代码**没有**改动模型。
-
-    实验 E 的 E3 要在干净模型上现训生成器，必须保证 ``clean_model`` 的参数
-    在训练前后完全不变（陷阱清单第 7 条）。比对本函数的返回值即可。
+def hash_state(state: Dict[str, torch.Tensor]) -> str:
+    """state_dict 的稳定哈希。
 
     只纳入浮点张量，按键名排序，转成 CPU float64 后取 blake2b —— 与设备、
     dtype 无关，可跨机器比对。
@@ -175,13 +172,73 @@ def state_dict_hash(module: nn.Module) -> str:
     import hashlib
 
     digest = hashlib.blake2b(digest_size=16)
-    for key in sorted(module.state_dict().keys()):
-        value = module.state_dict()[key]
+    for key in sorted(state.keys()):
+        value = state[key]
         if not torch.is_tensor(value) or not value.dtype.is_floating_point:
             continue
         digest.update(key.encode("utf-8"))
         digest.update(value.detach().cpu().double().numpy().tobytes())
     return digest.hexdigest()
+
+
+def state_dict_hash(module: nn.Module) -> str:
+    """模型参数的稳定哈希，用于证明某段代码**没有**改动模型。
+
+    实验 E 的 E3 要在干净模型上现训生成器，必须保证 ``clean_model`` 的参数
+    在训练前后完全不变（陷阱清单第 7 条）；实验 F 用同一个哈希证明冻结的
+    生成器在整个矩阵评估过程中一位都没变。比对本函数的返回值即可。
+    """
+    return hash_state(module.state_dict())
+
+
+def compare_run_checkpoints(left_dir, right_dir) -> Tuple[bool, str]:
+    """逐文件比对两个 run 目录的 checkpoint 哈希。
+
+    用途：实验 F 需要给 attack run 补按轮次的快照埋点，而埋点只做 I/O
+    （不消耗 RNG、不碰 optimizer）。**如果这条成立，重跑必须与原 run 逐位一致。**
+    本函数把这个断言变成可复核的事实，而不是口头保证。
+
+    一致 → 实验 E 在旧 run 上得到的结论可以直接沿用到新 run。
+    不一致 → 如实报告分歧的文件；实验 F 的结果仍自洽于新 run，但**混用前
+    必须在新 run 上重算 E**。
+
+    只比对两边都存在的顶层 checkpoint（``global.pt`` / ``generator.pt`` /
+    ``client_*.pt``）；按轮次的快照目录是新 run 独有的，不参与比对。
+    """
+    left_dir, right_dir = Path(left_dir), Path(right_dir)
+    names = set()
+    for directory in (left_dir, right_dir):
+        for pattern in ("global.pt", "generator.pt", "client_*.pt"):
+            names.update(path.name for path in directory.glob(pattern))
+
+    same, differ, missing = [], [], []
+    for name in sorted(names):
+        left, right = left_dir / name, right_dir / name
+        if not left.exists() or not right.exists():
+            missing.append(f"{name}（仅存在于 "
+                           f"{'left' if left.exists() else 'right'} 侧）")
+            continue
+        if hash_state(load_checkpoint(left)) == hash_state(load_checkpoint(right)):
+            same.append(name)
+        else:
+            differ.append(name)
+
+    ok = not differ and not missing
+    lines = [
+        f"checkpoint 逐位比对: {'一致' if ok else '**存在分歧**'}",
+        f"  left : {left_dir}",
+        f"  right: {right_dir}",
+        f"  一致 {len(same)} 个 / 不一致 {len(differ)} 个 / 缺失 {len(missing)} 个",
+    ]
+    if differ:
+        lines.append(f"  哈希不同: {', '.join(differ[:20])}"
+                     + (f" ... 另有 {len(differ) - 20} 个" if len(differ) > 20 else ""))
+    if missing:
+        lines.extend(f"  缺失: {item}" for item in missing[:20])
+    if not ok:
+        lines.append("  → 重跑未能逐位复现。实验 F 的结果自洽于新 run，"
+                     "但与实验 E 的旧结果混用前必须在新 run 上重算 E。")
+    return ok, "\n".join(lines)
 
 
 def save_generator_meta(ckpt_dir, meta: Dict[str, Any]) -> Path:

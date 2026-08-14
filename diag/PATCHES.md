@@ -102,9 +102,17 @@ $ git diff --stat main -- . ':(exclude)diag'
   （`fl_process.py:6,14,22,32,38,41`），但原仓库**没有注册任何监听器**。
   `diag/hooks.py::attach_save_hook` 只是往这个既有总线上挂了个 handler。
 - **保存内容**：全局模型、每个客户端的本地模型、生成器、`meta.json`。
-- **注意事项**：`BasicClient.upload_model`（`client.py:28`）返回的是 `state_dict()`
-  的**引用**，而 `server.agg_avg`（`server.py:4-10`）会**原地修改 `state_dicts[0]`**。
-  所以 `save_state_dict` 深拷贝到 CPU 后才落盘
+- **注意事项（已修正措辞）**：`BasicClient.upload_model`（`client.py:28`）把
+  `state_dict()` 的返回值存到 `self.upload_state_dict`，而 `server.agg_avg`
+  （`server.py:4-10`）的 `average_dict = state_dicts[0]` 是**引用**。
+  但第 8 行 `average_dict[key] = average_dict[key] + state_dicts[idx][key]`
+  是**重新绑定字典条目**（创建新张量），**不是张量级的原地写** ——
+  所以客户端 `local_model` 的参数并不会被污染，被污染的是
+  `client.upload_state_dict` 这个属性所持的 dict。
+
+  结论不变：任何读 `upload_state_dict` 的代码必须自己深拷贝。
+  本工具包一律从 `module.state_dict()` 现取，`save_state_dict` 再
+  `detach().cpu().clone()`，两种情况都安全
   （回归测试 `test_hooks.py::test_save_state_dict_is_detached_cpu_copy`）。
 
 ### 埋点 2. 参与轮次计数
@@ -134,6 +142,34 @@ $ git diff --stat main -- . ':(exclude)diag'
 | `diag_is_malicious_slot` | 是否占据"恶意槽位"（分片 90..99），两种模式下一致，用于跨模式配对 |
 | `diag_poison_ratio` | 实际投毒比例 |
 | `diag_n_participations` | 被选中参与训练的轮次数 |
+
+### 埋点 5. 按轮次的快照（实验 F）
+
+- **接入点**：`on_client_end`（`fl_process.py:32`）与 `on_round_end`
+  （`fl_process.py:38`），同样是既有事件，**原仓库文件仍为零 diff**。
+- **实现**：`diag/snapshots.py::SnapshotRecorder`，由
+  `diag/run_fl.py --snapshot-every N` 启用。
+- **保存内容**：每 N 轮把全局模型、抽样客户端的本地模型、生成器存到
+  `{ckpt_dir}/round_XXXX/`，另写 `snapshot_manifest.json`。
+- **为什么需要**：实验 F 要构造 (生成器轮次 s, 模型轮次 t) 的矩阵。
+  生成器侧的按轮次快照早已有（`attach_generator_checkpoint_hook`），
+  **模型侧从来没有实现过** —— `save_run` 只在 `run_fl.py` 末尾调用一次，
+  官方仓库里 `torch.save` 一次都没出现。
+- **网格对齐的参与式快照**：FedBN 下客户端只在被选中的轮次才更新
+  `local_model`（100 个客户端每轮选 10 个）。若在网格轮次无差别地保存，
+  拿到的多半是陈旧权重且陈旧程度不被记录。因此改为"网格点之后的**首次参与**
+  时保存"，并把 `staleness = 实际轮次 − 网格轮次` 逐份写进 manifest，
+  作为分析中的协变量。缺失的网格点写进 `missing` 字段，
+  **不补齐、不插值**。
+- **是否影响训练动力学**：**否**。埋点只做 I/O —— 不消耗任何 RNG、
+  不触碰 optimizer、不做前向。这一点不是口头保证：
+  `run_fl.py --verify-against <旧 run 目录>` 会在训练结束后逐位比对
+  `global.pt` / `generator.pt` / `client_*.pt` 的参数哈希
+  （`hooks.compare_run_checkpoints`）。
+- **回归测试**：`test_exp_f.py` 的
+  `test_snapshot_recorder_aligns_to_grid_and_records_staleness` /
+  `test_snapshot_recorder_catches_up_multiple_grid_points_at_once` /
+  `test_snapshot_recorder_reports_missing_without_filling_them_in`。
 
 ---
 

@@ -49,6 +49,9 @@ smoke:
   num_classes: 10
   alpha: 0.5
   seed: 0
+  # 实验 E/F 的共享探针集在冒烟配置下的规模。合成测试集只有几百张，
+  # 正式的 exp_e.probe_n=2000 会直接超出容量。
+  exp_e_probe_n: 200
   # 合成探针集的规模（远小于正式配置，仅为跑通流程）
   probe:
     n_ref: 24
@@ -121,6 +124,39 @@ exp_e:
   oracle_lr: 0.01              # 对应 fba.py:28 的 Adam lr=1e-2
   oracle_clients: 10           # E3 计算量大，只在抽样的客户端上做
   force_fp32_pgd: true         # 梯度符号在 fp16 下不稳定，PGD 路径强制 fp32
+
+# ---------------------------------------------------------------------------
+# 实验 F：冻结生成器的时间衰减矩阵
+#
+# 问题：把生成器冻结在轮次 s、让模型继续走到轮次 t，δ 还有效吗？
+#   H_stable   —— δ 稳定编码在共享参数里 → 冻结后仍有效
+#   H_coadapt  —— δ 是与当时那个 θ_g 协同适应出来的 → 随漂移快速失效
+# 这在真实攻击中永不发生：fba.trigger_gen_trainer 挂在 before_local_training
+# 上，恶意客户端每次被选中都会重新对齐当前 θ_g。
+#
+# ⚠️ FedBN 下 server.global_model 的 BN **永不更新**（pfl.py:5-12 把 bn /
+# shortcut.1 的键从 server.update 里 pop 掉），所以 global.pt 的 BN 停在
+# 初始化值。主评估对象因此定为个性化模型；"借-BN 全局模型"作为副对象。
+# ---------------------------------------------------------------------------
+exp_f:
+  snapshot_every: 50           # 快照网格间隔；1000 轮 -> 20 个点
+  snapshot_n_benign: 10        # 逐轮保存本地模型的良性客户端数
+  snapshot_n_malicious: 2      # 同上，恶意客户端数
+  snapshot_select_seed: 4242   # 选取快照客户端的独立 RNG 种子（与实验 seed 解耦）
+
+  # P2 的稀疏网格（15 格上三角），确认趋势后再加密到 snapshot_every 的全网格
+  grid_sparse: [200, 400, 600, 800, 1000]
+
+  # 主实验只测 delta_only（§2.2）：ξ 是每次现算的闭式解，不存在"冻结"概念，
+  # 混进来会让 δ 的时间行为读不出来。其余模式在 P3 补。
+  modes_p2: [delta_only]
+  modes_full: [delta_only, full_xi_frozen, full_xi_fresh]
+  # 与 s 无关、只随 t 变的模式，逐 t 单独计算一次（陷阱 3：基线不能用常数）
+  modes_per_t: [none, random_eps8]
+
+  eval_targets: [personalized, global_bn_borrowed]
+  bn_donor_client: null        # null = 取快照客户端里 client_id 最小的良性客户端
+  mature_s_threshold: 500      # §3.3 判据只看 s >= 该值的成熟生成器
 
 # ---------------------------------------------------------------------------
 # 确定性设置

@@ -16,7 +16,11 @@
    ``torch.Generator`` 取代 ``utils.random_select`` 的全局 RNG。
    否则攻击 run 额外消耗的 RNG（生成器初始化、每次 PGD 的随机起点）会让
    两种模式每轮选中的客户端集合完全不同，对照实验失效。
-3. **训练结束时保存 checkpoint 与 meta**：挂在既有的 ``on_fl_end`` 事件上。
+3. **保存 checkpoint 与 meta**：训练结束时保存一次；实验 F 另需按轮次的快照，
+   由 ``diag.snapshots.SnapshotRecorder`` 挂在既有的 ``on_client_end`` /
+   ``on_round_end`` 事件上（``--snapshot-every``）。两者都只做 I/O ——
+   不消耗 RNG、不触碰 optimizer，因此开不开快照的 run 应当逐位一致，
+   ``--verify-against`` 就是用来实证这一点的。
 
 以上三项都**不触碰攻击语义**：投毒函数、生成器训练、PGD、聚合规则、
 FedBN 逻辑全部原样调用原仓库实现。
@@ -46,8 +50,9 @@ from torch.utils.data.sampler import SubsetRandomSampler
 from . import REPO_ROOT  # noqa: F401  (副作用：把仓库根目录加入 sys.path)
 from .config import Cfg, load_config, make_select_rule, set_all_seeds
 from .hooks import (attach_generator_checkpoint_hook, build_client_meta,
-                    extract_generator, run_dir_name, save_generator_meta,
-                    save_run)
+                    compare_run_checkpoints, extract_generator, run_dir_name,
+                    save_generator_meta, save_run)
+from .snapshots import (SnapshotRecorder, build_grid, select_snapshot_clients)
 
 from client import BasicClient, PoisonClient
 from event_emitter import fl_event_emitter
@@ -152,8 +157,23 @@ def build_datasets(cfg: Cfg, smoke: bool,
 # ---------------------------------------------------------------------------
 def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            device: Optional[str] = None,
-           ckpt_root: Optional[str] = None) -> Path:
-    """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。"""
+           ckpt_root: Optional[str] = None,
+           snapshot_every: Optional[int] = None,
+           verify_against: Optional[str] = None) -> Path:
+    """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
+
+    Parameters
+    ----------
+    snapshot_every:
+        实验 F 用的按轮次快照间隔。``None`` 取 ``cfg.exp_f.snapshot_every``，
+        ``0`` 或负数表示关闭。开启后每 N 轮把全局模型、抽样客户端的本地模型
+        与生成器存到 ``{ckpt_dir}/round_XXXX/``，并写 ``snapshot_manifest.json``。
+    verify_against:
+        另一个 run 目录。训练结束后逐位比对两边的 ``global.pt`` /
+        ``generator.pt`` / ``client_*.pt``，用来实证"快照埋点只做 I/O、
+        不改变训练动力学"。比对结果只打印**不中止** —— 分歧本身是要报告的
+        结果，不是错误。
+    """
     if mode not in ("clean", "attack"):
         raise ValueError(f"mode 必须是 'clean' 或 'attack'，收到 '{mode}'")
 
@@ -280,6 +300,28 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
 
     fl_event_emitter.on("on_client_begin", count_participation)
 
+    # --- 6b. 实验 F 的按轮次快照（同样只做 I/O，不消耗 RNG） ---------------
+    exp_f_cfg = cfg.exp_f if "exp_f" in cfg else None
+    if snapshot_every is None:
+        snapshot_every = (int(exp_f_cfg.snapshot_every)
+                          if exp_f_cfg is not None else 0)
+    snapshot_every = int(snapshot_every)
+    recorder = None
+    snapshot_client_ids: List[int] = []
+    if snapshot_every > 0:
+        grid = build_grid(total_round, snapshot_every)
+        snapshot_client_ids = select_snapshot_clients(
+            clients,
+            n_benign=int(exp_f_cfg.snapshot_n_benign) if exp_f_cfg else 10,
+            n_malicious=int(exp_f_cfg.snapshot_n_malicious) if exp_f_cfg else 2,
+            seed=int(exp_f_cfg.snapshot_select_seed) if exp_f_cfg else 4242)
+        recorder = SnapshotRecorder(
+            ckpt_dir, grid, snapshot_client_ids,
+            generator_getter=(lambda: generator) if generator is not None else None)
+        recorder.attach()
+        print(f"[run_fl] 按轮次快照已开启：{len(grid)} 个网格点 "
+              f"× {len(snapshot_client_ids)} 个客户端 -> {ckpt_dir}/round_XXXX/")
+
     # --- 7. 训练 ----------------------------------------------------------
     select_rule = make_select_rule(
         select_per_round, seed + int(cfg.determinism.select_rule_seed_offset))
@@ -290,6 +332,13 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         fl_event_emitter.off("on_client_begin", count_participation)
         if generator_handler is not None:
             fl_event_emitter.off("on_round_end", generator_handler)
+        if recorder is not None:
+            recorder.detach()
+            manifest_path = recorder.write_manifest()
+            gaps = recorder.missing()
+            print(f"[run_fl] 快照清单 -> {manifest_path}"
+                  + (f"（{len(gaps)} 个网格点缺快照，见 manifest 的 'missing'）"
+                     if gaps else ""))
 
     # --- 8. 保存 ----------------------------------------------------------
     train_labels_by_client = {i: train_labels[train_indices[i]] for i in range(client_num)}
@@ -306,6 +355,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         "select_rule_seed": seed + int(cfg.determinism.select_rule_seed_offset),
         "synthetic_sizes": ([len(train_dataset), len(test_dataset)]
                             if smoke else None),
+        "snapshot_every": snapshot_every,
+        "snapshot_client_ids": snapshot_client_ids,
         "torch_version": torch.__version__,
         "numpy_version": np.__version__,
         "clients": build_client_meta(clients, train_labels_by_client,
@@ -334,6 +385,13 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             "run_id": run_dir_name(mode, alpha, seed),
         })
     print(f"[run_fl] mode={mode} alpha={alpha} seed={seed} -> {ckpt_dir}")
+
+    if verify_against:
+        ok, report = compare_run_checkpoints(Path(verify_against), ckpt_dir)
+        print(report)
+        if ok:
+            print("[run_fl] ✅ 与旧 run 逐位一致 —— 快照埋点确实没有改变训练"
+                  "动力学，实验 E 在旧 run 上的结论可直接沿用。")
     return ckpt_dir
 
 
@@ -351,11 +409,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ckpt-root", default=None)
     parser.add_argument("--smoke", action="store_true",
                         help="极小规模冒烟配置 + 合成数据（不依赖 torchvision）")
+    parser.add_argument("--snapshot-every", type=int, default=None,
+                        help="实验 F 的按轮次快照间隔；0 关闭，"
+                             "缺省取 config 的 exp_f.snapshot_every")
+    parser.add_argument("--verify-against", default=None,
+                        help="另一个 run 目录；训练结束后逐位比对 checkpoint，"
+                             "用于实证快照埋点未改变训练动力学")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
     run_fl(cfg, args.mode, args.alpha, args.seed, smoke=args.smoke,
-           device=args.device, ckpt_root=args.ckpt_root)
+           device=args.device, ckpt_root=args.ckpt_root,
+           snapshot_every=args.snapshot_every,
+           verify_against=args.verify_against)
     return 0
 
 
