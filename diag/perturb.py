@@ -47,14 +47,27 @@ import torch.nn as nn
 import fba  # 原仓库模块；直接复用 pgd_attack，不重写，避免实现漂移
 
 __all__ = ["MODES", "MODES_REQUIRING_DELTA", "MODES_REQUIRING_XI",
+           "DATA_SOURCE_MODES",
            "delta_from_generator", "make_xi_fn", "make_delta_fn",
            "apply_perturbation", "linf"]
 
-MODES = ("clean", "xi_only", "delta_only", "delta_plus_xi", "random_noise")
-MODES_REQUIRING_DELTA = ("delta_only", "delta_plus_xi")
-MODES_REQUIRING_XI = ("xi_only", "delta_plus_xi")
+MODES = ("clean", "xi_only", "delta_only", "delta_plus_xi", "random_noise",
+         # --- 实验 E 的别名与新增模式（见下方说明） ---
+         "none", "full", "random_eps4", "random_eps8")
+MODES_REQUIRING_DELTA = ("delta_only", "delta_plus_xi", "full")
+MODES_REQUIRING_XI = ("xi_only", "delta_plus_xi", "full")
 
 _DEFAULT_EPS = 4.0 / 255.0
+
+# 实验 E 用的模式名 -> 内部实现的映射。
+#   none         = clean          （干净基线）
+#   full         = delta_plus_xi  （完整触发器，总预算 8/255）
+#   random_eps4  / random_eps8    （固定预算的随机噪声负对照）
+# ``real_target`` **不在这里** —— 它不是对 x 的扰动，而是换一批数据
+# （真实的目标类图片），必须在评估循环里换 loader，见 diag/exp_e.py。
+_MODE_ALIASES = {"none": "clean", "full": "delta_plus_xi"}
+_FIXED_EPS_MODES = {"random_eps4": 4.0 / 255.0, "random_eps8": 8.0 / 255.0}
+DATA_SOURCE_MODES = ("real_target",)
 
 
 def linf(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -168,6 +181,7 @@ def apply_perturbation(images: torch.Tensor, mode: str,
                        labels: Optional[torch.Tensor] = None,
                        delta_fn: Optional[Callable] = None,
                        rng: Optional[torch.Generator] = None,
+                       noise_dist: str = "rademacher",
                        pixel_min: float = 0.0,
                        pixel_max: float = 1.0) -> torch.Tensor:
     """按 ``mode`` 施加扰动，返回与输入同形状的图像张量。
@@ -196,8 +210,18 @@ def apply_perturbation(images: torch.Tensor, mode: str,
     - 所有模式最终 clamp 到 ``[pixel_min, pixel_max]``。
     - 缺少必需组件时抛 ``ValueError``，**不做静默降级**。
     """
+    if mode in DATA_SOURCE_MODES:
+        raise ValueError(
+            f"'{mode}' 不是对 x 的扰动，而是换一批数据（真实目标类图片）。"
+            f"它必须在评估循环里通过更换 loader 实现，不能走 apply_perturbation。")
     if mode not in MODES:
         raise ValueError(f"未知的扰动模式 '{mode}'；可选: {list(MODES)}")
+
+    # random_eps4 / random_eps8 自带预算，忽略调用方传入的 eps，避免口径漂移
+    if mode in _FIXED_EPS_MODES:
+        eps = _FIXED_EPS_MODES[mode]
+        mode = "random_noise"
+    mode = _MODE_ALIASES.get(mode, mode)
 
     if mode == "clean":
         return images.clone()
@@ -246,9 +270,19 @@ def apply_perturbation(images: torch.Tensor, mode: str,
         # δ 由干净输入算（对应 fba.py:54 的 `trigger_gen(data)`）。
         out = xi_fn(images, labels) + delta_tensor
     elif mode == "random_noise":
-        signs = torch.randint(0, 2, images.shape, generator=rng,
-                              device=images.device, dtype=images.dtype) * 2 - 1
-        out = images + float(eps) * signs
+        if noise_dist == "rademacher":
+            # 逐元素 ±eps：L∞ **恰好** 等于 eps，是该预算下最强的随机噪声
+            signs = torch.randint(0, 2, images.shape, generator=rng,
+                                  device=images.device, dtype=images.dtype) * 2 - 1
+            out = images + float(eps) * signs
+        elif noise_dist == "uniform":
+            # U(-eps, eps)：L∞ **不超过** eps，通常严格小于
+            noise = torch.rand(images.shape, generator=rng, device=images.device,
+                               dtype=images.dtype) * 2.0 - 1.0
+            out = images + float(eps) * noise
+        else:
+            raise ValueError(
+                f"未知的 noise_dist '{noise_dist}'；可选 'uniform' / 'rademacher'")
     else:  # pragma: no cover - 上面已穷举
         raise ValueError(f"未处理的模式 '{mode}'")
 
