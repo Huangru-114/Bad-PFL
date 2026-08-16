@@ -170,8 +170,11 @@ class TrainingTracker:
         if self.recorder is None:
             return
 
-        k = (trim_count(len(state_dicts), self.trim_alpha)
-             if np.isfinite(self.trim_alpha) else None)
+        # 防御自己算过 trim 存活率就别再算一遍：argsort 在 [N, 2.4M] 上不便宜，
+        # 而且同一个量算两次也是一个潜在的不一致来源。
+        k = None
+        if outcome.trim_survival_rate is None and np.isfinite(self.trim_alpha):
+            k = trim_count(len(state_dicts), self.trim_alpha)
         signals = round_signals(w_prev, state_dicts, trim_k=k)
 
         self.recorder.write(RoundRecord(

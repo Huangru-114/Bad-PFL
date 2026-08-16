@@ -23,6 +23,20 @@
    为此所有量都按 key **流式累加**（L2 可按 key 累加平方和，余弦可累加内积与
    模长，影响力可累加坐标计数），全程不构造 ``[N, D]`` 的展平矩阵。
 
+# 设备
+
+模型在 GPU 上时，逐 key 的中间张量也在 GPU 上。**累加器的设备必须显式处理**，
+否则会在 ``accumulator += gpu_tensor`` 处抛
+``Expected all tensors to be on the same device``。本模块的约定是：
+
+- ``rank_window_fraction`` 内部的计数器跟随输入设备（它要和 ``bincount``
+  的输出相加）；
+- ``round_signals`` 的累加器留在 **CPU**，每个 key 只把长度为 N 的归约结果
+  ``.cpu()`` 搬回来。大张量始终留在 GPU，又不必在 GPU 上分配 float64 副本。
+
+精度上用 ``sum(dtype=torch.float64)`` 在 float32 数据上做 float64 累加，
+避免把 ``[N, D]`` 整个转成 float64（ResNet-10 上约 400MB）。
+
 # 统一的影响力 I^(k)（实验 J §1.1 / 实验 I §5.2）
 
 ======================  ==============================================
@@ -120,12 +134,14 @@ def rank_window_fraction(stacked: torch.Tensor, low: int, high: int
         raise ValueError(f"名次窗口 [{low}, {high}) 超出 N={n_clients}")
     flat = stacked.reshape(n_clients, -1)
     order = torch.argsort(flat, dim=0)          # order[r, d] = 名次 r 的客户端
-    counts = torch.zeros(n_clients, dtype=torch.float64)
+    # 累加器必须与数据同设备（见模块 docstring 的"设备"一节）
+    counts = torch.zeros(n_clients, dtype=torch.float64, device=flat.device)
     for rank in range(low, high):
-        counts += torch.bincount(order[rank], minlength=n_clients).to(torch.float64)
+        counts += torch.bincount(order[rank], minlength=n_clients).to(counts.dtype)
     total = flat.shape[1]
-    return (counts / total) if total else torch.zeros(n_clients,
-                                                      dtype=torch.float64)
+    if not total:
+        return torch.zeros(n_clients, dtype=torch.float64, device=flat.device)
+    return counts / total
 
 
 def median_influence(stacked: torch.Tensor) -> torch.Tensor:
@@ -203,6 +219,8 @@ def round_signals(w_prev: Dict[str, torch.Tensor],
     shared_float, _, _ = split_keys(state_dicts[0])
     n_clients = len(state_dicts)
 
+    # 累加器留在 CPU，每个 key 只把**长度为 N 的归约结果**搬回来（几十个 float）。
+    # 这样大张量始终留在 GPU 上，又不必在 GPU 上分配 float64 副本。
     sq_norm = torch.zeros(n_clients, dtype=torch.float64)
     sq_to_median = torch.zeros(n_clients, dtype=torch.float64)
     dot_median = torch.zeros(n_clients, dtype=torch.float64)
@@ -216,18 +234,20 @@ def round_signals(w_prev: Dict[str, torch.Tensor],
         stacked = torch.stack(
             [reference - state[key].detach().to(reference.device, torch.float32)
              for state in state_dicts], dim=0)
-        flat = stacked.reshape(n_clients, -1).to(torch.float64)
+        flat = stacked.reshape(n_clients, -1)
         median = flat.median(dim=0).values
 
-        sq_norm += (flat ** 2).sum(dim=1)
-        sq_to_median += ((flat - median) ** 2).sum(dim=1)
-        dot_median += (flat * median).sum(dim=1)
-        sq_median += (median ** 2).sum()
+        # 用 sum(dtype=float64) 在 float32 数据上做 float64 累加：既保精度，
+        # 又不用把 [N, D] 整个转成 float64（ResNet-10 上那是约 400MB）。
+        sq_norm += (flat ** 2).sum(dim=1, dtype=torch.float64).cpu()
+        sq_to_median += ((flat - median) ** 2).sum(dim=1, dtype=torch.float64).cpu()
+        dot_median += (flat * median).sum(dim=1, dtype=torch.float64).cpu()
+        sq_median += (median ** 2).sum(dtype=torch.float64).cpu()
 
         numel = flat.shape[1]
-        median_hits += median_influence(stacked) * numel
+        median_hits += median_influence(stacked).cpu() * numel
         if trim_k is not None:
-            trim_hits += trim_survival(stacked, trim_k) * numel
+            trim_hits += trim_survival(stacked, trim_k).cpu() * numel
         total_coords += numel
 
     median_norm = torch.sqrt(sq_median).clamp(min=1e-12)

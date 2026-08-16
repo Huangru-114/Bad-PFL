@@ -290,10 +290,24 @@ python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 ### 3.7 跑测试
 
 ```bash
-python -m diag.tests.run_tests           # 94 个单元测试，约 5 秒
+python -m diag.tests.run_tests           # 266 个单元测试，约 30 秒
 python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 # 装了 pytest 的环境可直接：pytest diag/tests
 ```
+
+**⚠️ 上集群提交长作业前，先在计算节点单独跑一次：**
+
+```bash
+python -m diag.tests.run_tests test_defenses
+```
+
+必须看到 `test_all_defenses_run_on_cuda_when_available` **PASS，而不是"跳过"**。
+
+开发容器只有 CPU，**GPU 相关的问题在这里一个都测不出来** —— 第一版就是因为
+float64 累加器全建在 CPU 上、数据在 GPU 上，在集群第一轮聚合就崩
+（`Expected all tensors to be on the same device`）。`meta` 设备也替代不了：
+`meta + cpu` 不报错，且 `bincount` 在 meta 上未实现。几秒钟，
+比排队几小时后崩掉划算。
 
 ---
 
@@ -483,6 +497,7 @@ ResNet 的 BN 键全部匹配这两个模式（`resnet.py:22,25,32`）。
 | **全局模型 ASR 用的是借 BN 的版本** | 直接评估 `global.pt` 得到的是失配模型（§4b）。`acc_global_raw` 一并落盘，退化程度可见 |
 | **个性化模型的陈旧度** | 评估的是一组固定良性客户端，它们的模型停在各自上次参与的那一轮 —— 这正是论文 ASR 的定义。`n_eval_clients_participated_this_round` 作协变量记录 |
 | **评估是否扰动训练** | 第一版实现**会**扰动（评估里 `get_resnet()` 消耗全局 RNG，只有恶意客户端与生成器受影响，良性客户端毫无变化——极易被误读成"防御生效了"）。已修复并加了回归测试，见 `PATCHES.md` 埋点 7。正式规模仍建议用 `--verify-against` 复核一次 |
+| **GPU 路径无法在本容器验证** | 本容器只有 CPU。第一版的 float64 累加器全建在 CPU 上，在集群 GPU 上直接崩（`Expected all tensors to be on the same device`）。已系统性修复 11 处，并加了 `test_all_defenses_run_on_cuda_when_available`——**它在本地空转，在集群上才真跑**。`meta` 设备无法替代（`meta + cpu` 不报错，且 `bincount` 未实现），所以**上集群前务必先跑一次这个测试** |
 
 ---
 

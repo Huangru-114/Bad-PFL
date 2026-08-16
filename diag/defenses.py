@@ -112,11 +112,13 @@ def gram_matrix(w_prev: Dict[str, torch.Tensor],
     ResNet-10 上 D 接近 500 万，float32 的累加误差会污染余弦的第 3 位小数。
     """
     n_clients = len(state_dicts)
+    # 累加器留在 CPU：每个 key 只搬回一个 N×N 的小矩阵（模型在 GPU 上时，
+    # 若累加器也在 CPU 而 `flat @ flat.T` 在 GPU，就会抛设备不一致）。
     gram = torch.zeros(n_clients, n_clients, dtype=torch.float64)
     for key in keys:
         flat = _pseudo_grad_stack(w_prev, state_dicts, key).reshape(
             n_clients, -1).to(torch.float64)
-        gram += flat @ flat.T
+        gram += (flat @ flat.T).cpu()
     return gram
 
 
@@ -136,9 +138,10 @@ def _plain_mean(state_dicts: Sequence[Dict[str, torch.Tensor]], key: str
     reference = state_dicts[0][key]
     if not torch.is_tensor(reference):
         return copy.deepcopy(reference)
-    stacked = torch.stack(
-        [state[key].detach().to(torch.float64) for state in state_dicts], dim=0)
-    return stacked.mean(dim=0).to(reference.dtype)
+    # 用 mean(dtype=float64) 而不是先把整个 stack 转成 float64：
+    # ResNet-10 的最大一层上后者是约 190MB 的临时分配。
+    stacked = torch.stack([state[key].detach() for state in state_dicts], dim=0)
+    return stacked.mean(dim=0, dtype=torch.float64).to(reference.dtype)
 
 
 def _apply(w_prev: Dict[str, torch.Tensor], key: str,
@@ -202,13 +205,13 @@ class Median(Defense):
     def _aggregate_shared(self, w_prev, state_dicts, keys):
         n_clients = len(state_dicts)
         update: Dict[str, torch.Tensor] = {}
-        hits = torch.zeros(n_clients, dtype=torch.float64)
+        hits = torch.zeros(n_clients, dtype=torch.float64)   # 累加器在 CPU
         total = 0
         for key in keys:
             stacked = _pseudo_grad_stack(w_prev, state_dicts, key)
             update[key] = _apply(w_prev, key, stacked.median(dim=0).values)
             numel = stacked[0].numel()
-            hits += median_influence(stacked) * numel
+            hits += median_influence(stacked).cpu() * numel
             total += numel
         influence = (hits / max(total, 1)).numpy()
         return update, DefenseOutcome(
@@ -238,7 +241,7 @@ class InvariantAggregator(Defense):
         k = trim_count(n_clients, self.trim_alpha)
         update: Dict[str, torch.Tensor] = {}
         kept, total, zeros_total, consistency_sum = 0, 0, 0, 0.0
-        survival = torch.zeros(n_clients, dtype=torch.float64)
+        survival = torch.zeros(n_clients, dtype=torch.float64)   # 累加器在 CPU
         effective = n_clients
 
         for key in keys:
@@ -254,7 +257,7 @@ class InvariantAggregator(Defense):
             kept += int((mask > 0).sum())
             zeros_total += int(zeros.sum())
             consistency_sum += float(consistency.sum())
-            survival += trim_survival(stacked, k) * numel
+            survival += trim_survival(stacked, k).cpu() * numel
 
         mask_keep_ratio = kept / total if total else float("nan")
         survival_rate = (survival / max(total, 1)).numpy()
@@ -398,12 +401,18 @@ class Flame(Defense):
         update: Dict[str, torch.Tensor] = {}
         for key in keys:
             stacked = _pseudo_grad_stack(w_prev, state_dicts, key)[chosen]
-            weighted = stacked * weights.view(-1, *([1] * (stacked.dim() - 1)))
+            # weights 来自 CPU 上的 gram，stacked 可能在 GPU 上
+            local_weights = weights.to(stacked.device, stacked.dtype)
+            weighted = stacked * local_weights.view(
+                -1, *([1] * (stacked.dim() - 1)))
             aggregated = weighted.mean(dim=0)
             if sigma > 0:
-                noise = torch.empty_like(aggregated).normal_(
+                # 噪声在 CPU 上按独立 Generator 生成后再搬过去：
+                # CPU 的 Generator 不能直接用于 CUDA 张量的 normal_()。
+                noise = torch.empty(aggregated.shape, dtype=torch.float32).normal_(
                     mean=0.0, std=sigma, generator=generator)
-                aggregated = aggregated + noise
+                aggregated = aggregated + noise.to(aggregated.device,
+                                                   aggregated.dtype)
             update[key] = _apply(w_prev, key, aggregated)
 
         extra = {"clip_bound": clip_bound, "noise_sigma": sigma,

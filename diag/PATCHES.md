@@ -224,6 +224,36 @@ $ git diff --stat main -- . ':(exclude)diag'
   （`seed + round * 7919`），有 `test_flame_noise_never_touches_the_global_rng`
   盯着。
 
+### 埋点 8. 设备一致性（GPU 上才会暴露的一类 bug）
+
+第一版在集群 GPU 上第一轮聚合就崩：
+`RuntimeError: Expected all tensors to be on the same device, but found at
+least two devices, cuda:0 and cpu!`
+
+成因是同一族的 **11 处**：所有 float64 累加器都用
+`torch.zeros(..., dtype=torch.float64)` 建在**默认设备（CPU）**上，
+而逐 key 的中间张量跟随模型在 **GPU** 上。开发容器只有 CPU，
+所以整套单元测试与冒烟一个都没抓到。
+
+统一后的约定：
+
+| 位置 | 处理 |
+|---|---|
+| `instrumentation.rank_window_fraction` | 计数器建在 `flat.device` —— 它要和 `bincount` 的输出直接相加 |
+| `instrumentation.round_signals` | 累加器留在 **CPU**，每个 key 只把长度为 N 的归约结果 `.cpu()` 搬回来 |
+| `defenses.gram_matrix` | 同上，每个 key 只搬回 N×N |
+| `defenses.Median` / `InvariantAggregator` | 影响力累加器留 CPU，逐 key `.cpu()` |
+| `defenses.Flame` | `weights` 来自 CPU 上的 gram，乘之前 `.to(stacked.device)`；噪声在 CPU 上按独立 `Generator` 生成后再搬过去（**CPU 的 Generator 不能直接用于 CUDA 张量的 `normal_()`**） |
+
+精度上改用 `sum(dtype=torch.float64)` / `mean(dtype=torch.float64)`
+在 float32 数据上做 float64 累加，避免把 `[N, D]` 整个转成 float64
+（ResNet-10 上约 400MB）。
+
+**回归测试**：`test_all_defenses_run_on_cuda_when_available`。它在无 GPU 的机器上
+**空转并打印"跳过"** —— 所以提交长作业前必须在计算节点上单独跑一次，
+确认它是 PASS 而不是跳过。`meta` 设备无法替代：`meta + cpu` 不报错，
+且 `bincount` 在 meta 上未实现。
+
 ---
 
 ## 三、`diag/run_fl.py` 与 `main.py` 的关系

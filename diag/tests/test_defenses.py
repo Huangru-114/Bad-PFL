@@ -283,6 +283,41 @@ def test_ablation_verdict_says_undetermined_when_variants_are_missing():
     assert "invariant_mask_only" in verdict["missing"]
 
 
+def test_all_defenses_run_on_cuda_when_available():
+    """设备一致性回归。
+
+    第一版实现在集群上崩了：``Expected all tensors to be on the same device``
+    —— 所有 float64 累加器都建在 CPU 上，而数据在 GPU 上。本容器只有 CPU，
+    这个测试在这里是空转；**它的价值在于集群上会真跑**。
+
+    没有 GPU 时用 meta 设备也无法替代：``meta + cpu`` 不报错，
+    且 ``bincount`` 在 meta 上未实现。
+    """
+    if not torch.cuda.is_available():
+        print("      (跳过：本机无 CUDA —— 这个测试要在集群上才有意义)")
+        return
+
+    device = torch.device("cuda:0")
+    torch.manual_seed(0)
+    w_prev = {k: v.to(device) for k, v in get_resnet(size=10).state_dict().items()}
+    clients = []
+    for offset in range(6):
+        torch.manual_seed(offset + 1)
+        clients.append({k: v.to(device)
+                        for k, v in get_resnet(size=10).state_dict().items()})
+
+    from diag.instrumentation import round_signals
+
+    for name in list(DEFENSES) + list(ABLATION_VARIANTS):
+        update, outcome = build_defense(name, tau=0.2, trim_alpha=0.25)(
+            w_prev, clients)
+        assert update["linear.weight"].device.type == "cuda", name
+        assert np.isfinite(outcome.influence).all(), name
+    signals = round_signals(w_prev, clients, trim_k=1)
+    for key, values in signals.items():
+        assert np.isfinite(values).all(), key
+
+
 def test_preserve_rng_state_restores_all_three_streams():
     """周期评估必须不推进任何随机流。
 
