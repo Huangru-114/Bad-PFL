@@ -171,6 +171,59 @@ $ git diff --stat main -- . ':(exclude)diag'
   `test_snapshot_recorder_catches_up_multiple_grid_points_at_once` /
   `test_snapshot_recorder_reports_missing_without_filling_them_in`。
 
+### 埋点 6. 服务器端聚合规则的替换（实验 I / J）
+
+- **接入点**：`diag/defenses.py::use_defense` 用 `types.MethodType` 绑定一个新的
+  `agg_and_update` 到 **server 实例**上。`BasicServer` 类本身不受影响，
+  `server.py` 仍为零 diff。
+- **为什么不能挂钩子**：`before_update_global` 在 `agg_avg` **之后**才触发
+  （`server.py:32-33`），拿不到聚合前的各客户端更新，无法替换聚合规则本身。
+- **FedBN 行为一位不变**：新的 `agg_and_update` 仍然把 FedBN 私有 key 与非浮点
+  key 以简单平均放进 `server.update`，再调 `call_registered_func(
+  "before_update_global")`、再 `load_state_dict(..., strict=False)` ——
+  与 `server.py:32-34` 的顺序完全一致，`fedbn_update` 照常 pop。
+- **`--defense fedavg` 完全不接管**，走原仓库的 `agg_avg`。这样"无防御"这一组
+  与既有的实验 A–F 结果**严格同源**，不会因为换了一份数值等价的实现而产生
+  细微差别（等价性另有 `test_fedavg_matches_repo_agg_avg` 保证）。
+- **不改动客户端侧任何代码**，攻击保持原样（实验 I §2.3 / 实验 J 陷阱 13）。
+- **回归测试**：`test_defenses.py`（19 个），重点是
+  `test_defenses_do_not_mutate_incoming_state_dicts`（`agg_avg` 别名 bug）与
+  `test_every_defense_leaves_fedbn_keys_in_the_update_dict`。
+
+### 埋点 7. 训练期的逐轮记录与周期评估（实验 I §5 / 实验 J §2、§5）
+
+- **接入点**：`on_round_begin`（取本轮选中的客户端）、`on_round_end`（周期评估），
+  以及 `use_defense` 的聚合回调（拿到与聚合器同一份 `w_prev`）。
+- **只写标量**：10 客户端 × 1000 轮 × ResNet-10 的更新向量约 200GB，
+  因此每轮只落盘 `round_{t:04d}.npz` 里的标量与长度为 N 的数组。
+- **全局模型必须借 BN**：FedBN 下 `server.global_model` 的 BN 从未更新，
+  直接评估得到的是失配模型。`acc_global` / `asr_global_*` 一律在
+  "全局共享参数 + 一个固定良性客户端的 BN"上算，**另存** `acc_global_raw`
+  把退化程度显式暴露，而不是藏起来。
+- **是否影响训练动力学**：**不影响 —— 但第一版实现是影响的，靠实测才发现。**
+
+  第一版按上面这套道理写完后，同一 seed 下 `--eval-every 1` 与 `--eval-every 0`
+  的 checkpoint 比对结果是：`client_{恶意}.pt` / `generator.pt` / `global.pt`
+  **三个哈希不同**，而三个良性客户端**完全一致**。
+
+  成因：`_maybe_evaluate` 为了构造"借 BN 的全局模型"要 `get_resnet()` 新建模型，
+  **权重初始化消耗全局 torch RNG**。良性客户端看不出变化，是因为它们的
+  DataLoader 迭代器在 `BasicClient.__init__` 时就建好了；而恶意客户端的投毒掩码
+  （`fba.py:49` 的 `torch.rand`）、PGD 随机起点（`fba.py:8`）与生成器训练
+  都在训练时现取 RNG，于是被整体推移。
+
+  **这种局部差异极易被误读成"防御生效了"** —— 恰恰是恶意客户端和生成器变了。
+
+  修复：`diag/track.py::preserve_rng_state` 把**整个评估过程**包起来，
+  保存/恢复 torch（含 CUDA）/ numpy / random 三条流。不是只包新建模型那几行 ——
+  评估路径上任何一处碰随机流都会被吸收掉。修复后同一比对为
+  **6/6 一致**。回归测试 `test_preserve_rng_state_restores_all_three_streams`。
+
+  同一类问题在 FLAME 的加噪上也存在：`torch.empty_like().normal_()` 若走全局
+  RNG 会每轮推进随机流。`Flame` 因此**始终**用独立的 `torch.Generator`
+  （`seed + round * 7919`），有 `test_flame_noise_never_touches_the_global_rng`
+  盯着。
+
 ---
 
 ## 三、`diag/run_fl.py` 与 `main.py` 的关系

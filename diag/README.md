@@ -35,6 +35,11 @@
 |---|---|---|---|
 | `hooks.py` | checkpoint 保存 + 对照组校验 + 生成器提取 + 逐位比对 | `save_run`, `attach_save_hook`, `build_client_meta`, `verify_partition_consistency`, `extract_generator`, `flatten_state_dict`, `run_dir_name`, `hash_state`, `state_dict_hash`, `compare_run_checkpoints` | `run_fl`, `exp_c`, `exp_f`, `run_matrix` |
 | `snapshots.py` | **按轮次的快照埋点**（实验 F） | `SnapshotRecorder`, `build_grid`, `select_snapshot_clients`, `available_rounds`, `load_manifest` | `run_fl`, `exp_f` |
+| `fedbn.py` | FedBN key 判定的**唯一定义**（对齐 `pfl.py:8/17`） | `is_fedbn_private_key`, `split_keys` | `exp_f`, `invariant_agg`, `defenses`, `instrumentation` |
+| `invariant_agg.py` | Invariant Aggregator（Wang et al. AISTATS'24）重实现 | `invariant_aggregate`, `use_invariant_aggregator`, `sign_consistency`, `and_mask`, `trimmed_mean` | `defenses` |
+| `defenses.py` | 五种聚合规则的统一接口 + 消融变体 | `build_defense`, `use_defense`, `DEFENSES`, `ABLATION_VARIANTS` | `run_fl` |
+| `instrumentation.py` | 实验 I/J **共用**的逐轮埋点与影响力定义 | `round_signals`, `compose_influence`, `RoundRecorder`, `rank_distribution`, `influence_summary` | `defenses`, `track`, `exp_ij` |
+| `track.py` | 训练期逐轮 npz + 周期性 ACC/ASR 评估 | `TrainingTracker` | `run_fl` |
 | `run_fl.py` | **诊断用 FL 训练驱动**（clean / attack） | `run_fl`, `build_datasets`, `SyntheticImageDataset` | CLI, `exp_common`, 冒烟测试 |
 
 ### 实验驱动与分析
@@ -55,6 +60,7 @@
 | `exp_f_precheck.py` | 实验 F 的 Phase 0（快照盘点 / **FedBN 全局模型 BN 诊断** / 三方 clean acc / 重跑成本） | `inventory_snapshots`, `diagnose_global_bn`, `measure_clean_acc`, `estimate_rerun_cost` | CLI |
 | `exp_f.py` | 实验 F：冻结生成器的时间衰减矩阵（上三角 s × t） | `run_matrix`, `FrozenGenerator`, `compute_delta`, `make_frozen_xi_fn`, `load_snapshot_model` | CLI |
 | `analysis_f.py` | 实验 F 的汇总与三张图 | `summarize_f`, `matrix_pivot`, `decay_table`, `classify_decay`, `plot_f1..f3` | CLI |
+| `exp_ij.py` | 实验 I/J 的汇总：检出指标 / 名次分布 / ΔT 衰减 / 消融判据 | `detection_table`, `ranks_table`, `decay_table`, `ablation_verdict` | CLI |
 
 ### 测试
 
@@ -186,6 +192,45 @@ python -m diag.analysis_e_noise \
 下=`ASR(random) − ASR(none)`，其中 lift 是**同一客户端逐个相减后再聚合**，
 不是两个组均值相减——这样误差棒反映的是配对差异的离散度。
 横轴只有一个 α 时自动退化为纯标记并打印提醒，不画会被误读成趋势的连线。
+
+#### 实验 I / J：服务器端防御
+
+五种聚合规则（`fedavg` / `median` / `multi_krum` / `flame` / `invariant`），
+外加实验 I §3.1 的两个消融变体（`invariant_mask_only` / `invariant_trim_only`）。
+`fedavg` 默认**不接管** `agg_and_update`，走原仓库的 `agg_avg`，以保证"无防御"
+这一组与既有的实验 A–F 结果严格同源。**但加了 `--instrument-dir` 时它也会接管**
+——逐轮埋点必须拿到聚合前的各客户端更新，而 `before_update_global` 在 `agg_avg`
+之后才触发（`server.py:32-33`）就拿不到。两条路径数值等价，由
+`test_fedavg_matches_repo_agg_avg` 保证。
+
+```bash
+# 训练（逐轮 npz + 每 10 轮评估 ACC/ASR）
+python -m diag.run_fl --mode attack --alpha 0.5 --seed 0 \
+       --defense invariant --defense-tau 0.2 --defense-trim-alpha 0.25 \
+       --eval-every 10 --instrument-dir instrumentation
+
+# 消融（硬检查点：单组件必须显著劣于组合）
+for v in invariant invariant_mask_only invariant_trim_only; do
+  python -m diag.run_fl --mode attack --alpha 0.5 --seed 0 --defense $v \
+         --eval-every 10 --instrument-dir instrumentation
+done
+
+# 汇总：检出指标 + 名次分布 + 影响力 + ΔT 衰减 + 消融判据
+python -m diag.exp_ij \
+    --instrument-dir instrumentation/invariant_attack_a0.5_s0 \
+    --implantation-glob "results/raw/exp_ij_implantation_*.csv" \
+    --out-prefix results/exp_i --alpha-dirichlet 0.5
+```
+
+两条口径纪律，代码里强制执行：
+
+- **`median` / `invariant` 的 `tpr`/`fpr`/`precision` 恒为空**，它们不做客户端级
+  二元决策。空是空字符串，不是 0 也不是 `N/A`。
+- **不报逐轮 AUC 的平均值**（单轮通常只有 1 个恶意客户端，粒度只有 1/9），
+  改报名次分布 + 池化 Mann-Whitney AUC，0 恶意的轮次排除并计数。
+
+全局模型的 ACC/ASR 一律在**借 BN** 的版本上算（见 §4b），另存 `acc_global_raw`
+把 FedBN 下原始全局模型的退化程度显式暴露出来。
 
 #### 实验 F：冻结生成器的时间衰减矩阵
 
@@ -426,6 +471,18 @@ ResNet 的 BN 键全部匹配这两个模式（`resnet.py:22,25,32`）。
 | 借-BN 全局模型的供体选择 | 任选一个良性客户端，这本身是一个自由度 |
 | P2 稀疏网格取不到 `gap=500` | 步长 200 的网格只有 200 的倍数，§3.3 的 H_stable 侧判据在 P2 上必然返回"未能确定"。这是网格的真实限制，**绝不用插值补**（陷阱 8），有 `test_sparse_grid_cannot_reach_the_stable_gap` 固定住这个行为 |
 | 重跑与旧 run 的一致性 | 已在冒烟规模上实证：开/关快照埋点的两次 run **逐位一致**。GPU + 1000 轮的真实规模上仍需用 `--verify-against` 复核；若不一致，实验 E 与 F 的结果**不可混用**，须在新 run 上重算 E |
+
+### 5.7 实验 I / J 特有的限制
+
+| 项 | 状态 |
+|---|---|
+| **Invariant Aggregator 无官方代码** | 按论文 Algorithm 1 重实现。四处偏离（1/N 笔误、`sign(0)`、非浮点张量、整数 dtype）记在 `invariant_agg.py` 的模块 docstring |
+| **消融复现用 Bad-PFL，不是论文的边缘案例攻击** | 只能检验"单组件劣于组合"这个**相对**关系，拿不到 Table 4 的 .001 / .655 / .512 三个绝对数字做对照。这一条必须随消融结论一起报告 |
+| **FLAME 的 HDBSCAN 在 N=10 上会退化** | `min_cluster_size = N//2+1 = 6`，10 个点很可能全判为噪声。此时回退为"全部接受"并记录 `flame_fallback_triggered`；**回退触发的轮次比例必须报告**，否则会把"FLAME 没拦住"与"FLAME 根本没生效"混为一谈 |
+| **`sign(0)` 的实测水平** | 冒烟规模（4 客户端 / 合成数据）上 `zero_sign_ratio ≈ 1.6e-06`，远低于 1% 阈值，"弃权"变体大概率不需要。**正式规模上要复核**——它每轮都会自动落进 npz |
+| **全局模型 ASR 用的是借 BN 的版本** | 直接评估 `global.pt` 得到的是失配模型（§4b）。`acc_global_raw` 一并落盘，退化程度可见 |
+| **个性化模型的陈旧度** | 评估的是一组固定良性客户端，它们的模型停在各自上次参与的那一轮 —— 这正是论文 ASR 的定义。`n_eval_clients_participated_this_round` 作协变量记录 |
+| **评估是否扰动训练** | 第一版实现**会**扰动（评估里 `get_resnet()` 消耗全局 RNG，只有恶意客户端与生成器受影响，良性客户端毫无变化——极易被误读成"防御生效了"）。已修复并加了回归测试，见 `PATCHES.md` 埋点 7。正式规模仍建议用 `--verify-against` 复核一次 |
 
 ---
 

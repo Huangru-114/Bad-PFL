@@ -53,6 +53,9 @@ from .hooks import (attach_generator_checkpoint_hook, build_client_meta,
                     compare_run_checkpoints, extract_generator, run_dir_name,
                     save_generator_meta, save_run)
 from .snapshots import (SnapshotRecorder, build_grid, select_snapshot_clients)
+from .defenses import ABLATION_VARIANTS, DEFENSES, build_defense, use_defense
+from .instrumentation import RoundRecorder
+from .track import TrainingTracker
 
 from client import BasicClient, PoisonClient
 from event_emitter import fl_event_emitter
@@ -159,7 +162,13 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            device: Optional[str] = None,
            ckpt_root: Optional[str] = None,
            snapshot_every: Optional[int] = None,
-           verify_against: Optional[str] = None) -> Path:
+           verify_against: Optional[str] = None,
+           defense: str = "fedavg",
+           defense_tau: Optional[float] = None,
+           defense_trim_alpha: Optional[float] = None,
+           eval_every: int = 0,
+           instrument_dir: Optional[str] = None,
+           results_dir: Optional[str] = None) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -173,6 +182,17 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         ``generator.pt`` / ``client_*.pt``，用来实证"快照埋点只做 I/O、
         不改变训练动力学"。比对结果只打印**不中止** —— 分歧本身是要报告的
         结果，不是错误。
+    defense:
+        服务器端聚合规则（实验 I / J）。``"fedavg"`` 时**完全不接管**
+        ``agg_and_update``，走原仓库的 ``agg_avg`` —— 这样"无防御"这一组与
+        既有的实验 A–F 结果严格同源，不会因为换了一份等价实现而产生细微差别。
+        其余取值见 ``diag.defenses.DEFENSES`` 与 ``ABLATION_VARIANTS``。
+    eval_every:
+        每多少轮评估一次 ACC/ASR（全局 + 个性化，实验 I §5.5 / 实验 J §5）。
+        ``0`` 关闭。全局模型一律用**借 BN** 的版本，另存 ``acc_global_raw``
+        暴露 FedBN 下原始全局模型的退化程度。
+    instrument_dir:
+        逐轮 npz 的落盘根目录（实验 I §5.3 / 实验 J §2.2）。``None`` 关闭。
     """
     if mode not in ("clean", "attack"):
         raise ValueError(f"mode 必须是 'clean' 或 'attack'，收到 '{mode}'")
@@ -322,6 +342,65 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         print(f"[run_fl] 按轮次快照已开启：{len(grid)} 个网格点 "
               f"× {len(snapshot_client_ids)} 个客户端 -> {ckpt_dir}/round_XXXX/")
 
+    # --- 6c. 防御与逐轮埋点（实验 I / J） ---------------------------------
+    run_id = f"{defense}_{run_dir_name(mode, alpha, seed)}"
+    tracker = None
+    restore_defense = None
+    if defense != "fedavg" or eval_every > 0 or instrument_dir:
+        exp_i_cfg = cfg.exp_i if "exp_i" in cfg else None
+        tau = (defense_tau if defense_tau is not None
+               else (float(exp_i_cfg.tau) if exp_i_cfg else 0.2))
+        trim_alpha = (defense_trim_alpha if defense_trim_alpha is not None
+                      else (float(exp_i_cfg.trim_alpha) if exp_i_cfg else 0.25))
+
+        benign_ids = sorted(int(c.cid) for c in clients
+                            if not bool(getattr(c, "diag_is_malicious", False)))
+        n_eval = min(10, len(benign_ids))
+        probe = None
+        if eval_every > 0:
+            from .exp_e import build_exp_e_probe
+            probe_cfg = cfg
+            if smoke:
+                probe_cfg = Cfg({**cfg, "exp_e": {
+                    **cfg["exp_e"], "probe_n": int(cfg.smoke.exp_e_probe_n)}})
+            probe = build_exp_e_probe(test_dataset, target_class, probe_cfg)
+            cfg_for_eval = probe_cfg
+        else:
+            cfg_for_eval = cfg
+
+        tracker = TrainingTracker(
+            cfg=cfg_for_eval,
+            recorder=(RoundRecorder(instrument_dir, run_id) if instrument_dir
+                      else None),
+            device=torch_device, defense_name=defense, variant=defense,
+            tau=tau, trim_alpha=trim_alpha, alpha_dirichlet=float(alpha),
+            seed=int(seed), eval_every=int(eval_every),
+            eval_client_ids=benign_ids[:n_eval],
+            generator_getter=((lambda: generator) if generator is not None
+                              else None),
+            probe=probe, target_class=target_class, num_classes=num_classes)
+        tracker.attach(server, clients)
+
+        # fedavg 默认**不接管** agg_and_update，走原仓库的 agg_avg，
+        # 以保证"无防御"这一组与既有的实验 A–F 结果严格同源。
+        # 但要逐轮埋点就必须拿到聚合前的各客户端更新，而 `before_update_global`
+        # 在 agg_avg **之后**才触发（server.py:32-33）—— 拿不到。
+        # 所以开了 --instrument-dir 时 fedavg 也走 FedAvg 类；两者数值等价，
+        # 由 test_fedavg_matches_repo_agg_avg 保证。
+        needs_takeover = defense != "fedavg" or bool(instrument_dir)
+        if needs_takeover:
+            rule = build_defense(defense, tau=tau, trim_alpha=trim_alpha,
+                                 seed=seed)
+            restore_defense = use_defense(
+                server, rule,
+                on_round=lambda outcome, states, w_prev: tracker.on_aggregate(
+                    outcome, states, w_prev, clients))
+            note = ""
+            if defense == "fedavg":
+                note = "（为逐轮埋点接管聚合；与 agg_avg 数值等价）"
+            print(f"[run_fl] 防御 = {defense}"
+                  f"（tau={tau}, trim_alpha={trim_alpha}）{note}")
+
     # --- 7. 训练 ----------------------------------------------------------
     select_rule = make_select_rule(
         select_per_round, seed + int(cfg.determinism.select_rule_seed_offset))
@@ -339,6 +418,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             print(f"[run_fl] 快照清单 -> {manifest_path}"
                   + (f"（{len(gaps)} 个网格点缺快照，见 manifest 的 'missing'）"
                      if gaps else ""))
+        if restore_defense is not None:
+            restore_defense()
+        if tracker is not None:
+            tracker.detach()
 
     # --- 8. 保存 ----------------------------------------------------------
     train_labels_by_client = {i: train_labels[train_indices[i]] for i in range(client_num)}
@@ -386,6 +469,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         })
     print(f"[run_fl] mode={mode} alpha={alpha} seed={seed} -> {ckpt_dir}")
 
+    if tracker is not None and tracker.implantation_rows:
+        frame = tracker.implantation_frame()
+        out_dir = Path(results_dir or (Path(cfg.paths.results_root) / "raw"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"exp_ij_implantation_{run_id}.csv"
+        frame.to_csv(out, index=False)
+        print(f"[run_fl] 植入过程 {len(frame)} 行 -> {out}")
+
     if verify_against:
         ok, report = compare_run_checkpoints(Path(verify_against), ckpt_dir)
         print(report)
@@ -415,13 +506,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--verify-against", default=None,
                         help="另一个 run 目录；训练结束后逐位比对 checkpoint，"
                              "用于实证快照埋点未改变训练动力学")
+    parser.add_argument("--defense", default="fedavg",
+                        choices=list(DEFENSES) + list(ABLATION_VARIANTS),
+                        help="服务器端聚合规则；fedavg 走原仓库的 agg_avg")
+    parser.add_argument("--defense-tau", type=float, default=None,
+                        help="Invariant Aggregator 的 τ；缺省取 config")
+    parser.add_argument("--defense-trim-alpha", type=float, default=None,
+                        help="trimmed-mean 的 α；缺省取 config")
+    parser.add_argument("--eval-every", type=int, default=0,
+                        help="每 N 轮评估 ACC/ASR（全局 + 个性化）；0 关闭")
+    parser.add_argument("--instrument-dir", default=None,
+                        help="逐轮 npz 的落盘根目录；不给则不记录")
+    parser.add_argument("--results-dir", default=None,
+                        help="植入过程 CSV 的输出目录；缺省 results/raw")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
     run_fl(cfg, args.mode, args.alpha, args.seed, smoke=args.smoke,
            device=args.device, ckpt_root=args.ckpt_root,
            snapshot_every=args.snapshot_every,
-           verify_against=args.verify_against)
+           verify_against=args.verify_against,
+           defense=args.defense, defense_tau=args.defense_tau,
+           defense_trim_alpha=args.defense_trim_alpha,
+           eval_every=args.eval_every, instrument_dir=args.instrument_dir,
+           results_dir=args.results_dir)
     return 0
 
 

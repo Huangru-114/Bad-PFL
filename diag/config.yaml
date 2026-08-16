@@ -182,6 +182,34 @@ exp_i:
   # 归因（Phase 3）：后门关键维度的 top-k 比例
   topk_fractions: [0.001, 0.01, 0.05]
 
+  # 消融（§3.1 硬检查点）。三个变体都是同一个聚合器的参数设置，不是三份实现。
+  # ⚠️ 用的是 Bad-PFL 而非论文 Table 4 的边缘案例攻击，因此只能检验
+  # "单组件劣于组合"这个**相对**关系，拿不到 .001/.655/.512 三个绝对数字对照。
+  ablation_variants: [invariant, invariant_mask_only, invariant_trim_only]
+  ablation_last_n: 5           # 判据取每个变体最后 N 个评估点的平均 ASR
+
+# ---------------------------------------------------------------------------
+# 实验 J：FLAME / Median 的失效分析
+#
+# ⚠️ Median 与 Invariant Aggregator **不做客户端级二元决策**，
+# 对它们没有 TPR/FPR 可言（实验 J §1 表格）。相关列一律留空，
+# 不得用 0 或 "N/A" 填充后当数值参与统计。
+# ---------------------------------------------------------------------------
+exp_j:
+  eval_every: 10               # 每多少轮评估一次 ACC/ASR
+  defenses: [fedavg, median, flame, multi_krum, invariant]
+
+  flame:
+    noise_lambda: 0.001        # 噪声强度 = lambda × 更新范数中位数
+    min_cluster_size: null     # null = N//2 + 1（FLAME 原设定）；N=10 时是 6
+    # ⚠️ HDBSCAN 在 10 个点上很可能把全部点判为噪声。此时回退为"全部接受"，
+    # 并记录 flame_fallback_triggered —— 回退触发的轮次比例必须报告，
+    # 否则会把"FLAME 没拦住"与"FLAME 根本没生效"混为一谈。
+
+  multi_krum:
+    n_byzantine: 2             # 假定的拜占庭数 f；N=10 时取最近的 n−f−2=6 个
+    n_selected: null           # null = n − f
+
 # ---------------------------------------------------------------------------
 # 确定性设置
 # ---------------------------------------------------------------------------
