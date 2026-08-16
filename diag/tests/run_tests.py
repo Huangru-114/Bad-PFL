@@ -34,6 +34,7 @@ TEST_MODULES = [
     "diag.tests.test_analysis_e_noise",
     "diag.tests.test_exp_f",
     "diag.tests.test_analysis_f",
+    "diag.tests.test_invariant_agg",
 ]
 
 

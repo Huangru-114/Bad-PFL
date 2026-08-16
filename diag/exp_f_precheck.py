@@ -47,6 +47,7 @@ import torch
 from . import REPO_ROOT  # noqa: F401
 from .config import Cfg, load_config
 from .exp_common import resolve_device
+from .fedbn import is_fedbn_private_key
 from .hooks import load_checkpoint, load_meta, run_dir_name
 from .snapshots import available_rounds, build_grid
 
@@ -58,13 +59,8 @@ __all__ = ["inventory_snapshots", "diagnose_global_bn", "measure_clean_acc",
 _BN_INIT = {"weight": 1.0, "bias": 0.0, "running_mean": 0.0, "running_var": 1.0}
 
 
-def _is_bn_key(key: str) -> bool:
-    """与 ``pfl.py:8`` / ``pfl.py:17`` 的判定条件**逐字一致**。
-
-    刻意不写成更"正确"的实现（例如按模块类型判断）—— 这里要复现的是仓库
-    实际使用的那条规则，任何偏离都会让诊断结论对不上真实行为。
-    """
-    return "bn" in key or "shortcut.1" in key
+# 判定规则的**唯一定义**在 diag/fedbn.py
+_is_bn_key = is_fedbn_private_key
 
 
 def _fmt(value: Any, digits: int = 4) -> str:

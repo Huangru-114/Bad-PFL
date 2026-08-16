@@ -71,6 +71,7 @@ import torch.nn as nn
 from . import REPO_ROOT  # noqa: F401
 from .config import Cfg, load_config
 from .exp_common import resolve_device
+from .fedbn import is_fedbn_private_key
 from .exp_e import _metrics, _predict, build_exp_e_probe
 from .hooks import load_checkpoint, load_meta, run_dir_name, state_dict_hash
 from .perturb import apply_perturbation, make_xi_fn
@@ -273,9 +274,8 @@ def compute_frozen_xi(model: nn.Module, loader, device, cfg: Cfg) -> torch.Tenso
 # ---------------------------------------------------------------------------
 # 模型加载
 # ---------------------------------------------------------------------------
-def _is_bn_key(key: str) -> bool:
-    """与 ``pfl.py:8`` 逐字一致的 BN 键判定。"""
-    return "bn" in key or "shortcut.1" in key
+# 判定规则的**唯一定义**在 diag/fedbn.py（陷阱：各处各写一份必然静默漂移）
+_is_bn_key = is_fedbn_private_key
 
 
 def load_snapshot_model(run_dir: Path, round_number: int, *, kind: str,
