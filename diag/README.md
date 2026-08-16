@@ -51,6 +51,7 @@
 | `exp_e_precheck.py` | 实验 E 的 Phase 0 校验（干净分支 / 划分一致性 / E1-E2 就绪 / 参数哈希） | `check_clean_branch`, `check_partition_consistency` | CLI |
 | `exp_e.py` | 实验 E：对抗地板测定，四个 cell（E1-E4） | `run_cell`, `evaluate_mode`, `build_exp_e_probe`, `train_oracle_generator` | CLI |
 | `analysis_e.py` | 实验 E 的汇总与三张图 | `summarize_e`, `decomposition_e`, `classify_floor`, `plot_e1..e3` | CLI |
+| `analysis_e_noise.py` | E1 上"随机噪声响应 × 异构度"的良性/恶意分组图（集群侧独立脚本） | `summarize_noise`, `baseline_by_group`, `plot_noise_response` | CLI |
 | `exp_f_precheck.py` | 实验 F 的 Phase 0（快照盘点 / **FedBN 全局模型 BN 诊断** / 三方 clean acc / 重跑成本） | `inventory_snapshots`, `diagnose_global_bn`, `measure_clean_acc`, `estimate_rerun_cost` | CLI |
 | `exp_f.py` | 实验 F：冻结生成器的时间衰减矩阵（上三角 s × t） | `run_matrix`, `FrozenGenerator`, `compute_delta`, `make_frozen_xi_fn`, `load_snapshot_model` | CLI |
 | `analysis_f.py` | 实验 F 的汇总与三张图 | `summarize_f`, `matrix_pivot`, `decay_table`, `classify_decay`, `plot_f1..f3` | CLI |
@@ -164,6 +165,27 @@ python -m diag.exp_c --ckpt-dir checkpoints/attack_a0.5_s0 \
 python -m diag.exp_d --ckpt-dir checkpoints/attack_a0.5_s0 \
                      --out results/raw/expD_a0.5_s0.csv
 ```
+
+#### E1 的随机噪声响应 × 异构度（分良性/恶意）
+
+`random_eps4` / `random_eps8` 本来只是负对照，但它们确实把 ASR 抬高了
+（α=0.5 合并口径：`none` 0.0270 → `eps4` 0.0335 → `eps8` 0.0434）。
+这个脚本把抬升按**良性/恶意**拆开，看它是否随 α 变化。
+
+`results/exp_e_summary.csv` **没有 `is_malicious` 这一维**，所以必须读逐客户端的
+原始 CSV（`results/raw/` 被 gitignore，只在集群上）：
+
+```bash
+python -m diag.analysis_e_noise \
+    --raw-glob "results/raw/exp_e_E1_*.csv" \
+    --out-dir results/figs \
+    --summary-out results/exp_e_noise_response.csv
+```
+
+出一张上下两 panel 的图：上=绝对 ASR（含各组 `none` 基线虚线），
+下=`ASR(random) − ASR(none)`，其中 lift 是**同一客户端逐个相减后再聚合**，
+不是两个组均值相减——这样误差棒反映的是配对差异的离散度。
+横轴只有一个 α 时自动退化为纯标记并打印提醒，不画会被误读成趋势的连线。
 
 #### 实验 F：冻结生成器的时间衰减矩阵
 
