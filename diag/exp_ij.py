@@ -38,7 +38,8 @@ DETECTION_COLUMNS = [
     "influence_malicious_mean", "influence_benign_mean",
     "trim_survival_malicious_mean", "trim_survival_benign_mean",
     "mask_keep_ratio", "zero_sign_ratio", "effective_trim_n",
-    "malicious_rank_l2_mean", "malicious_rank_cos_mean",
+    "malicious_rank_l2_mean", "malicious_rank_norm_mean",
+    "malicious_rank_cos_mean",
     "flame_n_clusters", "flame_n_noise", "flame_max_cluster_size",
     "flame_fallback_triggered", "clip_rate_malicious", "clip_rate_benign",
 ]
@@ -97,6 +98,7 @@ def detection_table(records: Sequence[Dict[str, Any]], *,
             row["trim_survival_benign_mean"] = _group_mean(survival, benign)
 
         for signal, column in (("l2_to_median", "malicious_rank_l2_mean"),
+                               ("update_norm", "malicious_rank_norm_mean"),
                                ("cos_to_median", "malicious_rank_cos_mean")):
             if signal in record and malicious.any():
                 ranks = _descending_ranks(record[signal])
@@ -171,41 +173,94 @@ def decay_table(implantation: pd.DataFrame) -> pd.DataFrame:
 
 def ablation_verdict(implantation: pd.DataFrame, *, last_n: int = 5
                      ) -> Dict[str, Any]:
-    """实验 I §3.1 的硬检查点：单组件必须显著劣于组合。
+    """实验 I §3.1 的硬检查点：单组件必须**显著**劣于组合。
 
     取每个变体最后 ``last_n`` 个评估点的平均 ASR（个性化模型）。
 
+    # 为什么只看"单组件 > 组合"是不够的
+
+    §3.1 的原话是"单组件必须**显著**劣于组合"，论文 Table 4 的落差是
+    .001 vs .655/.512 —— 组合把 ASR 压到了地板上。如果三个变体都停在 0.9 以上，
+    "单组件 0.99 > 组合 0.91"这个排序**不构成实现正确的证据**：
+    它同样可以由"防御对这个攻击完全无效"产生，而那正是本检查点要排除的另一种
+    可能。只报排序会把一次**无区分力**的检查说成"通过"。
+
+    因此判据分三档，并且**以无防御的 FedAvg 为参照**（而不是某个拍脑袋的常数）：
+
+    - 组合明显低于 FedAvg **且**两个单组件都高于组合 → 通过
+    - 排序满足但组合并未把 ASR 压下来 → **未能确定**（检查无区分力），
+      此时既不能说实现正确，也不能说实现有误
+    - 排序被违反 → 未通过，实现很可能有误
+
     ⚠️ 这里用的是 Bad-PFL 本身，**不是论文 Table 4 的边缘案例攻击**，
-    因此只能检验"单组件劣于组合"这个**相对**关系，拿不到 .001 / .655 / .512
-    这三个绝对数字做对照。这一点必须随结论一起报告。
+    因此拿不到 .001 / .655 / .512 三个绝对数字做对照。这一点必须随结论一起报告。
     """
     needed = {"invariant", "invariant_mask_only", "invariant_trim_only"}
     present = set(implantation["defense"].unique())
     missing = sorted(needed - present)
+    caveat = ("消融用的是 Bad-PFL 而非论文 Table 4 的边缘案例攻击，"
+              "只能检验相对关系，无法与 .001/.655/.512 直接对照")
     if missing:
         return {"verdict": f"未能确定：缺少变体 {missing}",
-                "missing": missing, "available": sorted(present)}
+                "missing": missing, "available": sorted(present),
+                "caveat": caveat}
 
-    asr: Dict[str, float] = {}
-    for name in sorted(needed):
+    def _tail_mean(name: str) -> float:
         block = implantation[implantation["defense"] == name].sort_values("round")
         values = block["asr_personalized_targeted"].to_numpy(dtype=float)
         values = values[np.isfinite(values)][-int(last_n):]
-        asr[name] = float(values.mean()) if values.size else float("nan")
+        return float(values.mean()) if values.size else float("nan")
+
+    asr = {name: _tail_mean(name) for name in sorted(needed)}
+    baseline = _tail_mean("fedavg") if "fedavg" in present else float("nan")
+    asr["fedavg (no defence)"] = baseline
 
     combined = asr["invariant"]
-    singles = {k: v for k, v in asr.items() if k != "invariant"}
+    singles = {k: v for k, v in asr.items()
+               if k.startswith("invariant_")}
     worse = {k: v > combined for k, v in singles.items()}
-    passed = all(worse.values())
-    return {
+    ordering_ok = all(worse.values())
+    gaps = {k: v - combined for k, v in singles.items()}
+
+    result: Dict[str, Any] = {
         "asr": asr, "single_component_worse_than_combined": worse,
-        "passed": passed,
-        "verdict": ("通过：两个单组件的 ASR 都高于组合" if passed else
-                    "**未通过**：存在单组件的 ASR 不高于组合，实现很可能有误"
-                    "（最可能是掩码方向、伪梯度符号、或 trim 作用的维度）"),
-        "caveat": ("消融用的是 Bad-PFL 而非论文 Table 4 的边缘案例攻击，"
-                   "只能检验相对关系，无法与 .001/.655/.512 直接对照"),
+        "gap_vs_combined": gaps, "fedavg_baseline": baseline,
+        "caveat": caveat,
     }
+
+    if not ordering_ok:
+        result.update({
+            "passed": False,
+            "verdict": ("**未通过**：存在单组件的 ASR 不高于组合，实现很可能有误"
+                        "（最可能是掩码方向、伪梯度符号、或 trim 作用的维度）")})
+        return result
+
+    if not np.isfinite(baseline):
+        result.update({
+            "passed": None,
+            "verdict": ("未能确定：排序满足（两个单组件都高于组合），但**缺少无防御的 "
+                        "fedavg 对照**，无法判断组合是否真的把 ASR 压下来了。"
+                        "全部变体都停在高位时，排序本身可以由'防御完全无效'产生，"
+                        "不构成实现正确的证据。请补跑 `--defense fedavg` 同配置。")})
+        return result
+
+    # 组合相对无防御的下降幅度，与单组件之间的落差作比较
+    suppression = baseline - combined
+    max_gap = max(gaps.values()) if gaps else 0.0
+    if suppression <= max_gap:
+        result.update({
+            "passed": None,
+            "verdict": (f"未能确定：排序满足，但组合相对 fedavg 只降了 "
+                        f"{suppression:+.4f}，不大于单组件之间的最大落差 "
+                        f"{max_gap:.4f}。这次检查**没有区分力** —— 它既符合"
+                        f"'实现正确但防御对 Bad-PFL 无效'，也符合'实现有误'。")})
+        return result
+
+    result.update({
+        "passed": True,
+        "verdict": (f"通过：组合把 ASR 从 fedavg 的 {baseline:.4f} 压到 "
+                    f"{combined:.4f}（降 {suppression:.4f}），且两个单组件都更高")})
+    return result
 
 
 # ---------------------------------------------------------------------------

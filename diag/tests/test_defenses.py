@@ -348,15 +348,49 @@ def test_preserve_rng_state_restores_all_three_streams():
     assert python_before == py_random.getstate()
 
 
-def test_ablation_verdict_fails_when_a_single_component_is_not_worse():
+def _ablation_frame(values):
     import pandas as pd
 
-    rows = []
-    for name, asr in (("invariant", 0.9), ("invariant_mask_only", 0.2),
-                      ("invariant_trim_only", 0.3)):
-        rows.append({"defense": name, "round": 10,
-                     "asr_personalized_targeted": asr})
-    verdict = ablation_verdict(pd.DataFrame(rows))
+    return pd.DataFrame([{"defense": name, "round": 10,
+                          "asr_personalized_targeted": asr}
+                         for name, asr in values.items()])
+
+
+def test_ablation_verdict_fails_when_a_single_component_is_not_worse():
+    verdict = ablation_verdict(_ablation_frame({
+        "invariant": 0.9, "invariant_mask_only": 0.2,
+        "invariant_trim_only": 0.3}))
     assert verdict["passed"] is False
     assert "未通过" in verdict["verdict"]
     assert "边缘案例攻击" in verdict["caveat"]
+
+
+def test_ablation_verdict_is_undetermined_without_a_fedavg_baseline():
+    """排序满足但没有无防御对照 —— 不能算通过。
+
+    全部变体都停在高位时，"单组件 > 组合"这个排序同样可以由"防御完全无效"
+    产生，而那正是这个检查点要排除的另一种可能。
+    """
+    verdict = ablation_verdict(_ablation_frame({
+        "invariant": 0.91, "invariant_mask_only": 0.99,
+        "invariant_trim_only": 0.95}))
+    assert verdict["passed"] is None
+    assert "未能确定" in verdict["verdict"]
+    assert "fedavg" in verdict["verdict"]
+
+
+def test_ablation_verdict_is_undetermined_when_the_combination_suppresses_nothing():
+    """有 fedavg 对照，但组合几乎没把 ASR 压下来 -> 这次检查没有区分力。"""
+    verdict = ablation_verdict(_ablation_frame({
+        "fedavg": 0.93, "invariant": 0.91,
+        "invariant_mask_only": 0.99, "invariant_trim_only": 0.95}))
+    assert verdict["passed"] is None
+    assert "没有区分力" in verdict["verdict"]
+
+
+def test_ablation_verdict_passes_only_when_the_combination_actually_works():
+    verdict = ablation_verdict(_ablation_frame({
+        "fedavg": 0.95, "invariant": 0.05,
+        "invariant_mask_only": 0.65, "invariant_trim_only": 0.51}))
+    assert verdict["passed"] is True
+    assert "通过" in verdict["verdict"]
