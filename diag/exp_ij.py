@@ -450,7 +450,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "influence_ratio", "n_malicious_observations",
                 "n_benign_observations", "n_rounds_no_malicious"):
         print(f"  {key:<32} {summary[key]}")
-    print("  比值 ≈ 1 表示防御在这一环没有起作用")
+    # FedAvg 的 I^(k) 按定义恒为 1（compose_influence），比值必然是 1.0。
+    # 把它当成"防御没起作用"来读是同义反复 —— 那一组本来就没有防御。
+    defense_name = str(records[0].get("defense", ""))
+    is_fedavg = (defense_name in ("fedavg", "avg", "none")
+                 or (summary["influence_malicious_mean"] == 1.0
+                     and summary["influence_benign_mean"] == 1.0))
+    if is_fedavg:
+        print("  ⚠️ 这是 FedAvg 对照组：I^(k) 按定义恒为 1，比值必然是 1.0，"
+              "**不是一个发现**。")
+        print("     这一组的信息量在下面的名次分布里 —— 它给出"
+              "在没有任何防御干预时，更新空间里本来有多少可分性。")
+    else:
+        print("  比值 ≈ 1 表示防御在这一环没有起作用")
 
     decision = decision_diagnosis(detection)
     if "verdict" not in decision:
@@ -481,10 +493,25 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print("\n=== 名次分布（不报逐轮 AUC 的平均值）===")
     for _, row in ranks.iterrows():
-        print(f"  {row['signal']:<14} 池化AUC={row['pooled_auc']:.4f} "
+        n_obs = int(row["n_malicious_observations"])
+        auc = float(row["pooled_auc"])
+        # AUC < 0.5 不代表"没信号"，而是**信号反向**：判别力看 |AUC − 0.5|。
+        # 恶意客户端在该信号上系统性偏小，取负号就是一个同样有效的检测分数。
+        direction = ""
+        if np.isfinite(auc) and auc < 0.5:
+            direction = (f"  ← **反向**信号（恶意偏小）；取负后等效 AUC="
+                         f"{1 - auc:.4f}")
+        print(f"  {row['signal']:<14} 池化AUC={auc:.4f} "
               f"平均名次={row['mean_rank']:.2f} "
               f"用了 {int(row['n_rounds_used'])} 轮，"
-              f"排除 0 恶意 {int(row['n_rounds_no_malicious'])} 轮")
+              f"排除 0 恶意 {int(row['n_rounds_no_malicious'])} 轮"
+              f"（恶意观测 {n_obs} 个）{direction}")
+    if ranks["n_malicious_observations"].max() < 100:
+        print(f"  ⚠️ 恶意观测只有 "
+              f"{int(ranks['n_malicious_observations'].max())} 个，"
+              f"AUC 的 95% 置信区间约 ±0.04–0.07（Hanley-McNeil，"
+              f"且同轮内的良性并不独立，真实区间更宽）。"
+              f"低恶意密度下这是固有的 —— 要收窄只能加 seed。")
 
     if args.implantation_glob:
         import glob as globlib
