@@ -348,6 +348,55 @@ def test_preserve_rng_state_restores_all_three_streams():
     assert python_before == py_random.getstate()
 
 
+def test_decision_diagnosis_flags_a_tpr_that_is_only_an_exclusion_artefact():
+    """每轮固定排除 4/10 且与恶意无关 -> TPR≈0.4 但 J≈0，必须被点出来。"""
+    import pandas as pd
+
+    from diag.exp_ij import decision_diagnosis
+
+    rng = np.random.RandomState(0)
+    rows = []
+    for r in range(300):
+        excluded = np.zeros(10, dtype=bool)
+        excluded[rng.choice(10, 4, replace=False)] = True   # 与恶意无关
+        malicious = np.zeros(10, dtype=bool)
+        malicious[rng.choice(10, 1)] = True
+        tpr = float((excluded & malicious).sum() / malicious.sum())
+        fpr = float((excluded & ~malicious).sum() / (~malicious).sum())
+        rows.append({"round": r, "defense": "flame", "n_selected": 10,
+                     "n_malicious_in_round": 1, "tpr": tpr, "fpr": fpr,
+                     "youden_j": tpr - fpr, "n_excluded": 4})
+    result = decision_diagnosis(pd.DataFrame(rows))
+    assert abs(result["youden_j"]) < 0.05
+    assert abs(result["chance_tpr_fpr"] - 0.4) < 1e-9
+    assert any("基本无关" in n for n in result["notes"])
+
+
+def test_decision_diagnosis_stays_quiet_when_detection_is_real():
+    import pandas as pd
+
+    from diag.exp_ij import decision_diagnosis
+
+    rows = [{"round": r, "defense": "multi_krum", "n_selected": 10,
+             "n_malicious_in_round": 1, "tpr": 1.0, "fpr": 0.111,
+             "youden_j": 0.889, "n_excluded": 2} for r in range(100)]
+    result = decision_diagnosis(pd.DataFrame(rows))
+    assert result["youden_j"] > 0.8
+    assert not any("基本无关" in n for n in result["notes"])
+
+
+def test_decision_diagnosis_refuses_defenses_without_client_decisions():
+    import pandas as pd
+
+    from diag.exp_ij import decision_diagnosis
+
+    for defense in ("median", "invariant", "fedavg"):
+        rows = [{"round": 1, "defense": defense, "n_selected": 10,
+                 "n_malicious_in_round": 1}]
+        result = decision_diagnosis(pd.DataFrame(rows))
+        assert "不做客户端级二元决策" in result["verdict"], defense
+
+
 def test_chance_mask_keep_ratio_matches_the_binomial_tail():
     from diag.invariant_agg import chance_mask_keep_ratio
 
