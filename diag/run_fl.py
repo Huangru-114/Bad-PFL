@@ -397,7 +397,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
                       else None),
             device=torch_device, defense_name=defense, variant=defense,
             tau=tau, trim_alpha=trim_alpha, alpha_dirichlet=float(alpha),
-            seed=int(seed), eval_every=int(eval_every),
+            seed=int(seed), bad_client_num=int(bad_client_num),
+            eval_every=int(eval_every),
             eval_client_ids=benign_ids[:n_eval],
             # 正对照：恶意客户端**自己**的模型是被投毒的，其 ASR 应当很高。
             # 少了它，"良性 ASR 在基线"既可能是排除成功、也可能是投毒根本没生效。

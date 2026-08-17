@@ -61,6 +61,9 @@
 | `exp_f.py` | 实验 F：冻结生成器的时间衰减矩阵（上三角 s × t） | `run_matrix`, `FrozenGenerator`, `compute_delta`, `make_frozen_xi_fn`, `load_snapshot_model` | CLI |
 | `analysis_f.py` | 实验 F 的汇总与三张图 | `summarize_f`, `matrix_pivot`, `decay_table`, `classify_decay`, `plot_f1..f3` | CLI |
 | `exp_ij.py` | 实验 I/J 的汇总：检出指标 / 名次分布 / ΔT 衰减 / 消融判据 | `detection_table`, `ranks_table`, `decay_table`, `ablation_verdict` | CLI |
+| `analysis_ij.py` | 实验 I/J 的五张图（J-1..J-5），配色在 I/J 间共用 | `plot_j1..j5`, `DEFENSE_STYLE` | CLI |
+| `analysis_density.py` | 图 J-6：ACC/ASR × 恶意客户端数 + 每 ASR 点的 ACC 代价 | `load_implantation`, `tail_summary`, `accuracy_cost`, `plot_density` | CLI |
+| `run_density_sweep.py` | 恶意密度扫描的命令生成器（**默认 dry-run**） | `build_commands`, `expected_gap` | CLI |
 
 ### 测试
 
@@ -77,6 +80,7 @@
 | `tests/test_audit.py` | P0 排查工具：泄漏 monkey-patch、数据集重建守卫、Markdown 转义 |
 | `tests/test_exp_e.py` | 实验 E：双指标的分子分母、real_target 空分母、E3 不污染 clean 模型 |
 | `tests/test_analysis_e.py` | 实验 E 的汇总与绘图 + **「图中禁止中文」的强制检查** |
+| `tests/test_analysis_density.py` | 图 J-6：密度来源优先级、两级聚合、缺格断线、代价无定义时留空 |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -309,6 +313,34 @@ plot_a4('results/raw/expA_*.csv', 'results/figs/expA_A4.png')
 "
 ```
 
+### 3.5b 图 J-6：ACC / ASR × 恶意客户端数
+
+```bash
+python -m diag.analysis_density \
+    --implantation-glob "results/raw/exp_ij_implantation_*.csv" \
+    --out results/figs/exp_ij_density.png \
+    --summary-out results/exp_ij_density.csv --tail 5
+```
+
+上panel ASR、下panel ACC，一条线一个防御，横轴恶意客户端总数（分类位置）。
+除了图还打印一张表，含 `ΔASR` / `ΔACC` / **每压 1 个 ASR 点付几个 ACC 点**
+（同密度下与 `--baseline` 比，默认 `fedavg`）。
+
+三条纪律写在代码里：
+
+- **密度优先读 `bad_client_num` 列**，没有该列的旧 CSV 才回退解析文件名里的
+  `_bad{N}`；两者都没有时**报错并列出文件**，不套用 config 默认值。列与文件名
+  冲突时以列为准（文件名可能被改过）。仍然要覆盖时用 `--assume-bad-num`。
+- **误差棒只能是跨 seed 的 std。** 尾部 K 轮来自同一条轨迹、彼此自相关，
+  它们的 std 会显著低估不确定性 —— 这个数仍然算出来放在
+  `tail_std_within_run` 列，但**不画成误差棒、不当不确定度**。单 seed 时不画
+  误差棒并在图注里写明。
+- **缺格断线，不插值。** 某防御缺中间某个密度时用 nan 断开线段，并在终端列出
+  缺格；否则两端被直连，没测过的密度看起来就像测过了。
+
+`--paper-asr` / `--paper-bad-num` 可以叠一个论文数值的**单点星号标记** ——
+不画横线，因为论文的数字只对它自己那个密度成立。
+
 ### 3.6 扫描矩阵（**默认 dry-run**）
 
 ```bash
@@ -327,7 +359,7 @@ python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 ### 3.7 跑测试
 
 ```bash
-python -m diag.tests.run_tests           # 291 个单元测试，约 15 秒
+python -m diag.tests.run_tests           # 307 个单元测试，约 25 秒
 python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 # 装了 pytest 的环境可直接：pytest diag/tests
 ```
@@ -582,7 +614,7 @@ pandas 3.0.5 / scipy 1.17.1 / matplotlib 3.11.1 / pyyaml 6.0.1
 # torchvision: 未安装（正式实验必需）
 # pytest: 未安装（用 diag/tests/run_tests.py 代替）
 
-# 单元测试（291 个，约 15 秒）
+# 单元测试（307 个，约 25 秒）
 python -m diag.tests.run_tests
 python -m diag.tests.run_tests exp_f      # 只跑某个模块
 

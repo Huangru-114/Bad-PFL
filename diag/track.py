@@ -77,7 +77,10 @@ def preserve_rng_state():
         random.setstate(python_state)
 
 IMPLANTATION_COLUMNS = [
-    "round", "defense", "tau", "alpha", "alpha_dirichlet", "seed", "variant",
+    # bad_client_num 必须落在数据里。跨密度并表时若只能从文件名解析 `_bad5`,
+    # 一次改名或一个没打 tag 的 run 就会被静默归到错误的密度上。
+    "round", "defense", "bad_client_num",
+    "tau", "alpha", "alpha_dirichlet", "seed", "variant",
     "acc_global", "acc_global_raw", "acc_personalized",
     "asr_global_targeted", "asr_personalized_targeted", "asr_unfiltered",
     "mask_keep_ratio", "effective_trim_n", "zero_sign_ratio",
@@ -111,6 +114,9 @@ class TrainingTracker:
     trim_alpha: float = float("nan")
     alpha_dirichlet: float = float("nan")
     seed: int = 0
+    # 全局恶意客户端总数（不是当轮选中的恶意数，后者是 n_malicious_this_round）。
+    # −1 表示调用方没传，跨密度分析会明确报错而不是猜。
+    bad_client_num: int = -1
     eval_every: int = 0
     eval_client_ids: Sequence[int] = field(default_factory=tuple)
     eval_malicious_ids: Sequence[int] = field(default_factory=tuple)
@@ -295,6 +301,7 @@ class TrainingTracker:
             if bool(getattr(clients[i], "diag_is_malicious", False)))
         self.implantation_rows.append({
             "round": self.cur_round, "defense": self.defense_name,
+            "bad_client_num": int(self.bad_client_num),
             "tau": self.tau, "alpha": self.trim_alpha,
             "alpha_dirichlet": self.alpha_dirichlet, "seed": self.seed,
             "variant": self.variant or self.defense_name,

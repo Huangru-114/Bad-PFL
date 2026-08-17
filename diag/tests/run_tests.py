@@ -38,10 +38,28 @@ TEST_MODULES = [
     "diag.tests.test_instrumentation",
     "diag.tests.test_defenses",
     "diag.tests.test_analysis_ij",
+    "diag.tests.test_analysis_density",
 ]
 
 
+def _assert_registry_is_complete() -> None:
+    """目录里有 ``test_*.py`` 却没登记 -> 直接报错。
+
+    这个清单是手写的，漏登记的后果是**测试文件一个 case 都不跑而输出全绿** ——
+    比没有测试更糟。所以这里对着磁盘核一遍。
+    """
+    from pathlib import Path
+    on_disk = {f"diag.tests.{p.stem}"
+               for p in Path(__file__).parent.glob("test_*.py")}
+    missing = sorted(on_disk - set(TEST_MODULES))
+    if missing:
+        raise SystemExit(
+            "以下测试模块在磁盘上但没登记进 TEST_MODULES，"
+            f"它们的 case 一个都不会跑：\n  " + "\n  ".join(missing))
+
+
 def run(selector: str = "") -> int:
+    _assert_registry_is_complete()
     passed, failed = 0, []
     started = time.time()
 
