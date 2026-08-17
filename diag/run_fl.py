@@ -433,8 +433,19 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             note = ""
             if defense == "fedavg":
                 note = "（为逐轮埋点接管聚合；与 agg_avg 数值等价）"
-            print(f"[run_fl] 防御 = {defense}"
-                  f"（tau={tau}, trim_alpha={trim_alpha}）{note}")
+            elif defense == "oracle_exclude":
+                note = f"（inner={oracle_inner}；按真实标签完美剔除，不是可实现的防御）"
+            # 只打印这个防御**真的会读**的参数。以前无条件打印 tau/trim_alpha，
+            # 于是 FLAME / Multi-Krum 的日志看起来像是配了这两个值，
+            # 而它们根本不读 —— 日志会被当成配置凭据，不能这样写。
+            if defense in ("invariant", "invariant_mask_only",
+                           "invariant_trim_only"):
+                params = f"（tau={tau}, trim_alpha={trim_alpha}）"
+            elif defense == "flame":
+                params = f"（min_cluster_size=N//2+1, noise_seed={seed}）"
+            else:
+                params = ""
+            print(f"[run_fl] 防御 = {defense}{params}{note}")
 
     # --- 7. 训练 ----------------------------------------------------------
     select_rule = make_select_rule(
@@ -450,9 +461,16 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             recorder.detach()
             manifest_path = recorder.write_manifest()
             gaps = recorder.missing()
+            # missing() 的粒度是 **(客户端, 网格点) 组合**，不是网格点。
+            # 旧文案写成"N 个网格点缺快照"，于是 120 格里缺 9 格
+            # 会被读成"10 个网格点里缺了 9 个"—— 差一个数量级，
+            # 足以让人以为实验 F 没数据可跑。分子分母一起报。
+            n_cells = len(recorder.grid) * len(recorder.client_ids)
             print(f"[run_fl] 快照清单 -> {manifest_path}"
-                  + (f"（{len(gaps)} 个网格点缺快照，见 manifest 的 'missing'）"
-                     if gaps else ""))
+                  + (f"（{n_cells} 个 (客户端, 网格点) 组合里缺 {len(gaps)} 个 = "
+                     f"覆盖 {1 - len(gaps) / max(n_cells, 1):.1%}，"
+                     f"见 manifest 的 'missing'）" if gaps
+                     else f"（{n_cells} 个 (客户端, 网格点) 组合全部齐备）"))
         if restore_defense is not None:
             restore_defense()
         if tracker is not None:

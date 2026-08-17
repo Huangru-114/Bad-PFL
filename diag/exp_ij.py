@@ -294,6 +294,24 @@ def decision_diagnosis(detection: pd.DataFrame) -> Dict[str, Any]:
 
     tpr, fpr, j = _mean("tpr"), _mean("fpr"), _mean("youden_j")
     excluded = _mean("n_excluded")
+
+    # 池化口径：以 **(轮次, 客户端) 观测** 为单位，而不是"逐轮率再平均"。
+    # 两者不等 —— 逐轮平均让只有 1 个恶意客户端的轮次和有 3 个的权重相同,
+    # 而 influence_summary 明确按观测池化。回答"到底漏进去了多少个恶意更新"
+    # 的是**池化 TPR**：漏入数 = n_malicious_observations × (1 − pooled_tpr)。
+    # 两个都报，各自标注口径；不拿一个替换另一个。
+    n_mal = usable["n_malicious_in_round"].to_numpy(dtype=float)
+    n_ben = usable["n_selected"].to_numpy(dtype=float) - n_mal
+    tp = usable["tpr"].to_numpy(dtype=float) * n_mal
+    fp = usable["fpr"].to_numpy(dtype=float) * n_ben
+    ok = np.isfinite(tp) & np.isfinite(fp)
+    pooled_tpr = (float(tp[ok].sum() / n_mal[ok].sum())
+                  if ok.any() and n_mal[ok].sum() > 0 else float("nan"))
+    pooled_fpr = (float(fp[ok].sum() / n_ben[ok].sum())
+                  if ok.any() and n_ben[ok].sum() > 0 else float("nan"))
+    n_mal_obs = float(n_mal[ok].sum())
+    leaked = (n_mal_obs * (1.0 - pooled_tpr) if np.isfinite(pooled_tpr)
+              else float("nan"))
     n_selected = float(detection["n_selected"].mode().iloc[0])
     chance = excluded / n_selected if n_selected else float("nan")
 
@@ -313,6 +331,12 @@ def decision_diagnosis(detection: pd.DataFrame) -> Dict[str, Any]:
                          + ("；这些轮次 FLAME 实际上没有生效" if rate > 0 else ""))
     return {
         "defense": defense, "tpr": tpr, "fpr": fpr, "youden_j": j,
+        "pooled_tpr": pooled_tpr, "pooled_fpr": pooled_fpr,
+        "pooled_youden_j": (pooled_tpr - pooled_fpr
+                            if np.isfinite(pooled_tpr) and np.isfinite(pooled_fpr)
+                            else float("nan")),
+        "n_malicious_observations": int(n_mal_obs),
+        "n_malicious_leaked": leaked,
         "n_excluded_mean": excluded, "n_selected": n_selected,
         "chance_tpr_fpr": chance,
         "n_rounds_used": int(len(usable)),
@@ -467,14 +491,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     decision = decision_diagnosis(detection)
     if "verdict" not in decision:
         print("\n=== 检出表现（零假设：排除集与是否恶意无关）===")
-        print(f"  TPR              {decision['tpr']:.4f}")
-        print(f"  FPR              {decision['fpr']:.4f}")
+        print(f"  TPR              {decision['tpr']:.4f}   （逐轮率的平均）")
+        print(f"  FPR              {decision['fpr']:.4f}   （逐轮率的平均）")
         print(f"  Youden's J       {decision['youden_j']:+.4f}   ← 零假设 = 0")
         print(f"  每轮排除          {decision['n_excluded_mean']:.2f}"
               f" / {decision['n_selected']:.0f}"
               f"（无关时 TPR=FPR={decision['chance_tpr_fpr']:.4f}）")
         print(f"  用了 {decision['n_rounds_used']} 轮，"
               f"排除 0 恶意 {decision['n_rounds_no_malicious']} 轮")
+        # 池化口径与逐轮平均不是同一个数。决定"漏进去多少个恶意更新"的是池化的那个。
+        print(f"  池化 TPR/FPR      {decision['pooled_tpr']:.4f}"
+              f" / {decision['pooled_fpr']:.4f}"
+              f"  J={decision['pooled_youden_j']:+.4f}"
+              f"（以 (轮次,客户端) 观测为单位）")
+        print(f"  -> 漏入聚合的恶意更新 {decision['n_malicious_leaked']:.0f}"
+              f" / {decision['n_malicious_observations']} 个客户端-轮次")
         for note in decision["notes"]:
             print(f"  ⚠️ {note}")
 
