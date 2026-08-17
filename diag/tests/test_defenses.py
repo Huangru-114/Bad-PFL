@@ -348,6 +348,52 @@ def test_preserve_rng_state_restores_all_three_streams():
     assert python_before == py_random.getstate()
 
 
+def test_chance_mask_keep_ratio_matches_the_binomial_tail():
+    from diag.invariant_agg import chance_mask_keep_ratio
+
+    # N=10、τ=0.2 -> |Σ| ≥ 4 -> 1 − (C(10,4)+C(10,5)+C(10,6))/2^10
+    assert abs(chance_mask_keep_ratio(10, 0.2) - (1 - 672 / 1024)) < 1e-12
+    # τ=0.2 与 τ=0.3 是**同一个掩码**：Σ 与 N 同奇偶，|Σ|=3 不可能出现
+    assert chance_mask_keep_ratio(10, 0.2) == chance_mask_keep_ratio(10, 0.3)
+    # τ 越大保留越少
+    ratios = [chance_mask_keep_ratio(10, t) for t in (0.1, 0.3, 0.5, 0.7)]
+    assert ratios == sorted(ratios, reverse=True)
+
+
+def test_mask_diagnosis_flags_chance_level_and_no_response():
+    """两条判据都必须在"掩码没起作用"的构造上触发。"""
+    import pandas as pd
+
+    from diag.exp_ij import mask_diagnosis
+
+    rng = np.random.RandomState(0)
+    rows = []
+    for r in range(200):
+        n_mal = 1 if r % 2 else 0
+        rows.append({"round": r, "tau": 0.2, "n_selected": 10,
+                     "n_malicious_in_round": n_mal,
+                     # 贴着随机基线 0.34375，且与是否有恶意无关
+                     "mask_keep_ratio": 0.3438 + rng.normal(0, 0.002)})
+    result = mask_diagnosis(pd.DataFrame(rows))
+    assert result["equivalent_threshold"] == 4        # 不是 3
+    assert len(result["notes"]) == 2
+    assert "随机符号基线" in result["notes"][0]
+    assert "没有反应" in result["notes"][1]
+
+
+def test_mask_diagnosis_stays_quiet_when_the_mask_actually_works():
+    import pandas as pd
+
+    rows = [{"round": r, "tau": 0.2, "n_selected": 10,
+             "n_malicious_in_round": r % 2,
+             # 远高于随机基线，且攻击者在场时明显更低
+             "mask_keep_ratio": 0.90 if r % 2 == 0 else 0.60}
+            for r in range(200)]
+    from diag.exp_ij import mask_diagnosis
+
+    assert mask_diagnosis(pd.DataFrame(rows))["notes"] == []
+
+
 def _ablation_frame(values):
     import pandas as pd
 

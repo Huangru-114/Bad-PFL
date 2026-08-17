@@ -156,6 +156,26 @@ def sign_consistency(stacked: torch.Tensor, policy: str = "count"
     return consistency, zeros
 
 
+def chance_mask_keep_ratio(n_clients: int, tau: float) -> float:
+    """符号全为**独立公平硬币**时，AND-mask 的期望保留率。
+
+    这是解读 ``mask_keep_ratio`` 必须有的参照。掩码的前提是"符号一致性指示
+    该方向是否对多数客户端有益"；若实测保留率贴着这个基线，说明客户端之间
+    **根本没有可利用的符号一致性**，掩码退化成一个随机的稀疏化 ——
+    那是一种与"后门维度混过了掩码"完全不同的失效方式。
+
+    另一个必须知道的后果：``Σ_i sign(g_i)`` 与 N 同奇偶，所以阈值只有
+    ``⌊N/2⌋+1`` 个**互不相同**的取值。N=10 时 τ=0.2 与 τ=0.3 给出的是
+    **同一个掩码**（都等价于 ``|Σ| ≥ 4``），扫描时不要把它们当两个点。
+    """
+    from math import comb
+
+    n = int(n_clients)
+    keep = sum(comb(n, j) for j in range(n + 1)
+               if abs(2 * j - n) / n > float(tau))
+    return keep / (2 ** n)
+
+
 def and_mask(consistency: torch.Tensor, tau: float,
              mode: str = "binary", n_clients: int = 1) -> torch.Tensor:
     """``m = 1[consistency > τ]``，**严格大于**。

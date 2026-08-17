@@ -27,9 +27,10 @@ import pandas as pd
 from .instrumentation import (DEFENSES_WITH_CLIENT_DECISION, RANK_SIGNALS,
                               influence_summary, load_round_records,
                               rank_distribution)
+from .invariant_agg import chance_mask_keep_ratio
 
 __all__ = ["DETECTION_COLUMNS", "detection_table", "ranks_table",
-           "decay_table", "ablation_verdict", "main"]
+           "decay_table", "ablation_verdict", "mask_diagnosis", "main"]
 
 DETECTION_COLUMNS = [
     "round", "defense", "tau", "alpha", "alpha_dirichlet", "seed",
@@ -171,6 +172,69 @@ def decay_table(implantation: pd.DataFrame) -> pd.DataFrame:
         drop=True)
 
 
+def mask_diagnosis(detection: pd.DataFrame) -> Dict[str, Any]:
+    """AND-mask 到底在做什么：与"随机符号"基线比，以及是否对攻击者有反应。
+
+    两个必须一起看的量：
+
+    1. ``mask_keep_ratio`` **相对随机基线的超出量**。掩码的前提是符号一致性
+       能指示"该方向对多数客户端有益"；若实测保留率贴着随机基线，
+       说明客户端之间根本没有可利用的符号一致性，掩码退化成随机稀疏化。
+       这与"后门维度混过了掩码"是**两种不同的失效方式**，结论也不同。
+    2. **有/无恶意客户端的轮次之间，保留率是否有差别**。若掩码在抓攻击者，
+       攻击者在场时被掩掉的维度应当更多；若两者一样，掩码对攻击**没有反应**。
+    """
+    if detection.empty or "mask_keep_ratio" not in detection.columns:
+        return {"verdict": "未能确定：检出表里没有 mask_keep_ratio"}
+
+    observed = detection["mask_keep_ratio"].astype(float)
+    if not np.isfinite(observed).any():
+        return {"verdict": "未能确定：mask_keep_ratio 全为 nan（该防御没有掩码）"}
+
+    n_selected = int(detection["n_selected"].mode().iloc[0])
+    tau = float(detection["tau"].mode().iloc[0])
+    chance = chance_mask_keep_ratio(n_selected, tau)
+    mean_observed = float(observed.mean())
+
+    with_malicious = detection[detection["n_malicious_in_round"] > 0]
+    without = detection[detection["n_malicious_in_round"] == 0]
+    keep_with = (float(with_malicious["mask_keep_ratio"].mean())
+                 if len(with_malicious) else np.nan)
+    keep_without = (float(without["mask_keep_ratio"].mean())
+                    if len(without) else np.nan)
+
+    excess = mean_observed - chance
+    responds = (abs(keep_with - keep_without)
+                if np.isfinite(keep_with) and np.isfinite(keep_without) else np.nan)
+
+    notes = []
+    if abs(excess) < 0.05 * chance:
+        notes.append(
+            f"保留率 {mean_observed:.4f} 贴着随机符号基线 {chance:.4f}"
+            f"（超出 {excess:+.4f}）—— 客户端之间几乎没有可利用的符号一致性，"
+            f"掩码退化成随机保留约 {mean_observed:.0%} 的坐标")
+    if np.isfinite(responds) and responds < observed.std():
+        notes.append(
+            f"有恶意（{keep_with:.4f}）与无恶意（{keep_without:.4f}）的轮次"
+            f"保留率相差 {responds:.4f}，小于轮间标准差 {observed.std():.4f}"
+            f" —— 掩码对攻击者是否在场**没有反应**")
+    return {
+        "n_selected": n_selected, "tau": tau,
+        "mask_keep_ratio_mean": mean_observed,
+        "mask_keep_ratio_chance": chance,
+        "excess_over_chance": excess,
+        "keep_ratio_with_malicious": keep_with,
+        "keep_ratio_without_malicious": keep_without,
+        "notes": notes,
+        # |Σ sign| 与 N 同奇偶，所以只能取 {N%2, N%2+2, ...}。
+        # N=10 时 τ=0.2 与 τ=0.3 都等价于 |Σ| ≥ 4 —— 是**同一个掩码**。
+        # （sign(0)=0 会破坏奇偶性，但实测 zero_sign_ratio ≈ 3e-06，可忽略。）
+        "equivalent_threshold": min(
+            (v for v in range(n_selected % 2, n_selected + 1, 2)
+             if v / n_selected > tau), default=n_selected),
+    }
+
+
 def ablation_verdict(implantation: pd.DataFrame, *, last_n: int = 5
                      ) -> Dict[str, Any]:
     """实验 I §3.1 的硬检查点：单组件必须**显著**劣于组合。
@@ -301,6 +365,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "n_benign_observations", "n_rounds_no_malicious"):
         print(f"  {key:<32} {summary[key]}")
     print("  比值 ≈ 1 表示防御在这一环没有起作用")
+
+    mask = mask_diagnosis(detection)
+    if "verdict" not in mask:
+        print("\n=== AND-mask 在做什么 ===")
+        print(f"  实测保留率     {mask['mask_keep_ratio_mean']:.4f}")
+        print(f"  随机符号基线   {mask['mask_keep_ratio_chance']:.4f}"
+              f"  (N={mask['n_selected']}, τ={mask['tau']}"
+              f" 等价于 |Σ sign| ≥ {mask['equivalent_threshold']})")
+        print(f"  超出随机       {mask['excess_over_chance']:+.4f}")
+        print(f"  有恶意 / 无恶意 {mask['keep_ratio_with_malicious']:.4f}"
+              f" / {mask['keep_ratio_without_malicious']:.4f}")
+        for note in mask["notes"]:
+            print(f"  ⚠️ {note}")
 
     print("\n=== 名次分布（不报逐轮 AUC 的平均值）===")
     for _, row in ranks.iterrows():
