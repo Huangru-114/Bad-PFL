@@ -254,6 +254,27 @@ least two devices, cuda:0 and cpu!`
 确认它是 PASS 而不是跳过。`meta` 设备无法替代：`meta + cpu` 不报错，
 且 `bincount` 在 meta 上未实现。
 
+### 埋点 9. "静默"恶意客户端（`oracle_exclude`）
+
+- **接入点**：与其余防御同一个（`use_defense` 换掉 `server.agg_and_update`），
+  没有额外的 hook。
+- **它读了一个现实中拿不到的标签**：掩码来自
+  `[getattr(clients[i], "diag_is_malicious", False) for i in tracker.selected_indices]`,
+  按**本轮上传顺序**对齐（长度不一致直接报错，不做静默截断）。因此它是
+  **上界对照，不是防御**。
+- **`inner` 只作用在留下的客户端上**：`OracleExclude` 把幸存者的子列表交给内层规则，
+  再把 `influence` / `trim_survival_rate` **按原索引散射回长度 N 的数组**，
+  被排除的位置填 0。若不散射回去，并表时 `is_malicious` 的下标就会错位。
+- **全排除会报错而不是返回上一轮的权重**：`bad_client_num` 大到某轮抽中的全是恶意
+  客户端时抛 `RuntimeError`。静默地"不更新"会让曲线看起来只是收敛慢一点。
+- **良性客户端的 ASR 是负对照，不是结果。** 聚合是恶意→良性的唯一通道，被切断后
+  良性 ASR 必须留在基线；涨了就说明有计划外的泄漏（= bug）。这个失败模式在图上
+  和"防御生效"长得一样，所以它值得单独有一组。
+- **恶意客户端自己的模型另记一套列**：`acc_malicious_own` / `asr_malicious_own` /
+  `n_eval_malicious`（`track.py::eval_malicious_ids`）。它必然很高——个性化模型
+  就是在投毒数据上练出来的——**绝不能混进良性均值**，否则整组数字失去意义。
+  只有 `--eval-include-malicious` 时才记录。
+
 ---
 
 ## 三、`diag/run_fl.py` 与 `main.py` 的关系

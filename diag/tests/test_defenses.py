@@ -31,6 +31,13 @@ def _clients(rows):
     return [_state(row) for row in rows]
 
 
+def _malicious_getter(n: int, malicious=(0,)):
+    """给 ``oracle_exclude`` 用的恶意掩码；遍历 ``DEFENSES`` 的测试都要带上它。"""
+    mask = np.zeros(n, dtype=bool)
+    mask[list(malicious)] = True
+    return lambda: mask
+
+
 # ---------------------------------------------------------------------------
 # FedAvg 必须与原仓库等价
 # ---------------------------------------------------------------------------
@@ -52,7 +59,8 @@ def test_defenses_do_not_mutate_incoming_state_dicts():
     for name in DEFENSES:
         clients = _clients([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
         snapshots = [{k: v.clone() for k, v in c.items()} for c in clients]
-        build_defense(name, tau=0.0, trim_alpha=0.25)(w_prev, clients)
+        build_defense(name, tau=0.0, trim_alpha=0.25,
+                      malicious_getter=_malicious_getter(4))(w_prev, clients)
         for state, snapshot in zip(clients, snapshots):
             for key in state:
                 assert torch.equal(state[key], snapshot[key]), f"{name}: {key}"
@@ -221,7 +229,9 @@ def test_every_defense_leaves_fedbn_keys_in_the_update_dict():
                 "bn1.num_batches_tracked": torch.tensor(i)}
                for i in range(1, 5)]
     for name in DEFENSES:
-        update, _ = build_defense(name, tau=0.0, trim_alpha=0.25)(w_prev, clients)
+        update, _ = build_defense(name, tau=0.0, trim_alpha=0.25,
+                                  malicious_getter=_malicious_getter(4)
+                                  )(w_prev, clients)
         assert "bn1.running_mean" in update, name
         assert update["bn1.num_batches_tracked"].dtype == torch.int64, name
 
@@ -346,6 +356,88 @@ def test_preserve_rng_state_restores_all_three_streams():
     assert torch.equal(torch_before, torch.get_rng_state())
     assert np.array_equal(numpy_before, np.random.get_state()[1])
     assert python_before == py_random.getstate()
+
+
+def test_oracle_exclude_drops_exactly_the_malicious_updates():
+    """静默恶意：被剔除者影响力为 0，聚合结果等于只对良性求平均。"""
+    from diag.defenses import OracleExclude
+
+    w_prev = _state([0.0])
+    clients = _clients([[2.0], [4.0], [100.0]])      # 第 3 个是恶意
+    mask = np.array([False, False, True])
+    update, outcome = OracleExclude(malicious_getter=lambda: mask)(w_prev, clients)
+
+    assert float(update["linear.weight"][0]) == 3.0   # (2+4)/2，恶意的 100 未参与
+    assert np.allclose(outcome.influence, [1.0, 1.0, 0.0])
+    assert outcome.selected.tolist() == [True, True, False]
+    assert outcome.extra["n_excluded_oracle"] == 1
+    assert outcome.extra["inner_defense"] == "fedavg"
+
+
+def test_oracle_exclude_yields_perfect_tpr_and_zero_fpr():
+    """上界组的自检：完美决策必须让整套 TPR/FPR 机制给出 1.0 / 0.0。"""
+    from diag.exp_ij import detection_table
+
+    record = _record("oracle_exclude", selected=[False, True, True, True])
+    frame = detection_table([record])
+    assert float(frame["tpr"].iloc[0]) == 1.0
+    assert float(frame["fpr"].iloc[0]) == 0.0
+    assert float(frame["youden_j"].iloc[0]) == 1.0
+
+
+def test_oracle_exclude_refuses_a_mask_of_the_wrong_length():
+    """掩码顺序/时机对不上是静默错误，必须报错而不是凑合。"""
+    from diag.defenses import OracleExclude
+
+    w_prev = _state([0.0])
+    clients = _clients([[1.0], [2.0], [3.0]])
+    rule = OracleExclude(malicious_getter=lambda: np.array([False, True]))
+    try:
+        rule(w_prev, clients)
+    except ValueError as exc:
+        assert "长度" in str(exc)
+    else:
+        raise AssertionError("掩码长度不符必须报错")
+
+
+def test_oracle_exclude_aborts_when_every_client_is_malicious():
+    """全恶意时没有合法聚合结果；静默地把攻击者聚合进去是最坏结局。"""
+    from diag.defenses import OracleExclude
+
+    w_prev = _state([0.0])
+    clients = _clients([[1.0], [2.0]])
+    rule = OracleExclude(malicious_getter=lambda: np.array([True, True]))
+    try:
+        rule(w_prev, clients)
+    except RuntimeError as exc:
+        assert "全是恶意" in str(exc)
+    else:
+        raise AssertionError("全恶意必须中止")
+
+
+def test_oracle_exclude_requires_a_getter():
+    from diag.defenses import OracleExclude
+
+    try:
+        OracleExclude()(_state([0.0]), _clients([[1.0]]))
+    except ValueError as exc:
+        assert "malicious_getter" in str(exc)
+    else:
+        raise AssertionError("缺 malicious_getter 必须报错")
+
+
+def test_oracle_exclude_can_wrap_another_rule():
+    """剔除后可以再叠一个聚合规则；默认是 fedavg，但不写死。"""
+    rule = build_defense("oracle_exclude", inner="median",
+                         malicious_getter=lambda: np.array([False] * 4 + [True]))
+    w_prev = _state([0.0])
+    clients = _clients([[1.0], [2.0], [3.0], [4.0], [900.0]])
+    update, outcome = rule(w_prev, clients)
+    assert outcome.extra["inner_defense"] == "median"
+    assert float(outcome.influence[4]) == 0.0
+    # 剩下 4 个的 g = [-1,-2,-3,-4]；torch.median 对偶数取**下**中位 -> -3，
+    # 于是 w_t = 0 − (−3) = 3。恶意的 900 完全没有参与。
+    assert float(update["linear.weight"][0]) == 3.0
 
 
 def test_decision_diagnosis_flags_a_tpr_that_is_only_an_exclusion_artefact():

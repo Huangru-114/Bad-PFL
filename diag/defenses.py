@@ -57,7 +57,7 @@ __all__ = ["DEFENSES", "ABLATION_VARIANTS", "DefenseOutcome", "Defense",
            "build_defense", "use_defense", "gram_matrix"]
 
 DEFENSES: Tuple[str, ...] = ("fedavg", "median", "invariant", "multi_krum",
-                             "flame")
+                             "flame", "oracle_exclude")
 
 # 实验 I §3.1 的消融：三个变体都是**同一个聚合器的参数设置**，不是三份实现。
 # 这样"单组件"与"组合"之间不可能出现实现差异带来的伪差别。
@@ -428,6 +428,86 @@ class Flame(Defense):
             selected=selected, extra=extra)
 
 
+class OracleExclude(Defense):
+    """"静默"恶意客户端：按**真实标签**完美剔除恶意更新。
+
+    恶意客户端一切照常 —— 本地在投毒数据上训练、每次被选中都对着刚下发的
+    全局模型重训生成器 30 步 —— **只是它的更新永远不进入聚合**。
+
+    # 这一格测什么
+
+    它同时是三件东西：
+
+    1. **任何排除型防御的上界。** TPR=1、FPR=0，没有防御能做得更好。
+       若后门在这个设定下仍然出现在**良性**客户端的个性化模型里，那就说明
+       "识别并排除恶意客户端"这条路原则上走不通。
+    2. **整条流水线的负对照。** 恶意 -> 良性的唯一通道就是聚合。把它掐断后
+       良性 ASR 若仍高于基线，说明有**意料之外的泄漏**，是 bug 而不是发现。
+    3. **实验 E3 的连续对齐版本，也是最强的白盒 δ。** E3 是对着**最终**的
+       干净模型训 30 步（ASR 0.1462）；这里生成器在约 50 次参与 × 30 步
+       ≈ 1500 步里**持续追踪正在训练的那个干净模型**。若 δ 仍然无效，
+       "δ 是目标类自然特征"在其最强形式下也被否掉。
+
+    位置上它介于 ``bad=1``（模型被投毒 47 轮）与 E2/E3（模型从未被投毒，
+    但生成器只对齐了别的轨迹或只训了 30 步）之间。
+
+    # 正对照不可省
+
+    恶意客户端**自己**的个性化模型是被投毒的，其 ASR 应当很高。
+    没有这个正对照，"良性 ASR 在基线"既可能是"排除成功"也可能是
+    "投毒根本没生效"，两者读不出来 —— 见 ``--eval-include-malicious``。
+    """
+
+    name = "oracle_exclude"
+
+    def __init__(self, inner: Optional[Defense] = None,
+                 malicious_getter: Optional[Callable[[], np.ndarray]] = None):
+        # 内层默认 FedAvg：既然攻击者已被完美剔除，剩下的就该是无防御的平均，
+        # 否则把"完美排除"与"某个聚合规则"两件事混在一起了。
+        self.inner = inner or FedAvg()
+        self.malicious_getter = malicious_getter
+
+    def __call__(self, w_prev, state_dicts):
+        if self.malicious_getter is None:
+            raise ValueError(
+                "OracleExclude 需要 malicious_getter —— 它要按真实标签剔除，"
+                "所以必须能拿到当轮选中客户端的恶意掩码")
+        malicious = np.asarray(self.malicious_getter(), dtype=bool)
+        if malicious.shape[0] != len(state_dicts):
+            raise ValueError(
+                f"恶意掩码长度 {malicious.shape[0]} 与本轮上传数 "
+                f"{len(state_dicts)} 不一致 —— 顺序或时机对不上，必须中止")
+        keep = np.flatnonzero(~malicious).tolist()
+        if not keep:
+            # 全部选中的客户端都是恶意的：没有合法的聚合结果。
+            # 静默地把攻击者聚合进去是最坏的结局，所以直接中止。
+            raise RuntimeError(
+                "本轮选中的客户端全是恶意的，完美排除后无更新可聚合。"
+                "请降低恶意比例或增大每轮选中数。")
+
+        update, outcome = self.inner(w_prev, [state_dicts[i] for i in keep])
+
+        # 影响力与决策按**全体**选中客户端回填：被剔除的记 0
+        influence = np.zeros(len(state_dicts), dtype=float)
+        influence[keep] = np.asarray(outcome.influence, dtype=float)
+        selected = ~malicious
+
+        survival = None
+        if outcome.trim_survival_rate is not None:
+            survival = np.zeros(len(state_dicts), dtype=float)
+            survival[keep] = np.asarray(outcome.trim_survival_rate, dtype=float)
+
+        extra = dict(outcome.extra)
+        extra.update({"defense": self.name, "inner_defense": self.inner.name,
+                      "n_excluded_oracle": int(malicious.sum())})
+        return update, DefenseOutcome(
+            influence=influence, selected=selected,
+            trim_survival_rate=survival,
+            mask_keep_ratio=outcome.mask_keep_ratio,
+            zero_sign_ratio=outcome.zero_sign_ratio,
+            effective_trim_n=outcome.effective_trim_n, extra=extra)
+
+
 # ---------------------------------------------------------------------------
 # 构造与接入
 # ---------------------------------------------------------------------------
@@ -451,6 +531,14 @@ def build_defense(name: str, **kwargs: Any) -> Defense:
     if name == "flame":
         return Flame(**{k: v for k, v in kwargs.items()
                         if k in ("noise_lambda", "min_cluster_size", "seed")})
+    if name == "oracle_exclude":
+        inner_name = str(kwargs.get("inner", "fedavg"))
+        if inner_name == "oracle_exclude":
+            raise ValueError("oracle_exclude 不能嵌套自身")
+        inner = build_defense(inner_name, **{k: v for k, v in kwargs.items()
+                                            if k != "inner"})
+        return OracleExclude(inner=inner,
+                             malicious_getter=kwargs.get("malicious_getter"))
     raise ValueError(
         f"未知的防御 '{name}'；可选 {list(DEFENSES) + list(ABLATION_VARIANTS)}")
 

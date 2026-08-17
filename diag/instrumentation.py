@@ -78,8 +78,11 @@ __all__ = ["DEFENSES_WITH_CLIENT_DECISION", "RANK_SIGNALS", "RoundRecord",
            "load_round_records", "rank_distribution", "pooled_auc",
            "influence_summary"]
 
-# 只有这两类防御会输出"这个客户端是恶意的"这种判断
-DEFENSES_WITH_CLIENT_DECISION: Tuple[str, ...] = ("flame", "multi_krum")
+# 只有这几类防御会输出"这个客户端是恶意的"这种判断。
+# ``oracle_exclude`` 是按真实标签剔除的上界组，它的决策是**完美**的
+# （TPR=1、FPR=0）—— 把它算进来正好给整套 TPR/FPR 机制一个自检。
+DEFENSES_WITH_CLIENT_DECISION: Tuple[str, ...] = ("flame", "multi_krum",
+                                                  "oracle_exclude")
 
 # 名次分布要报的三个信号（实验 J §3.3：另外两个作对照）
 RANK_SIGNALS: Tuple[str, ...] = ("l2_to_median", "update_norm", "cos_to_median")

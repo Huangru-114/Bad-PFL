@@ -232,6 +232,43 @@ python -m diag.exp_ij \
 全局模型的 ACC/ASR 一律在**借 BN** 的版本上算（见 §4b），另存 `acc_global_raw`
 把 FedBN 下原始全局模型的退化程度显式暴露出来。
 
+#### "静默"恶意客户端（`--defense oracle_exclude`）
+
+只有一个恶意客户端，且它的更新**一次都不进聚合**——完美排除（TPR=1、FPR=0）。
+它照常本地训练、照常训练生成器，只是上传的东西被丢掉。
+
+```bash
+python -m diag.run_fl --mode attack --alpha 0.5 --seed 0 \
+       --bad-client-num 1 --defense oracle_exclude \
+       --eval-every 10 --instrument-dir instrumentation \
+       --eval-include-malicious
+```
+
+`--oracle-inner` 决定剩下的良性更新怎么聚合（默认 `fedavg`；`median`、`flame` 等
+也可以，用来问"排除之后剩余的防御还有没有代价"）。`--eval-include-malicious`
+额外记录恶意客户端**自己那份个性化模型**的 ACC/ASR（`acc_malicious_own` /
+`asr_malicious_own` / `n_eval_malicious`），与良性客户端的列分开，不进良性均值。
+
+这一组同时是三件事：
+
+1. **任何基于排除的防御的上界。** Multi-Krum 的 J=+0.654、FLAME 的 +0.225 都在
+   往这里逼近，这一组给出"逼到极限会怎样"。
+2. **整条流水线的负对照。** 聚合是恶意→良性的**唯一**通道，所以良性客户端的
+   ASR 必须停在基线。若它涨了，说明有一条计划外的泄漏通道（= bug），
+   而这种现象在图上读起来**恰好像防御生效**，很容易被当成结果。
+3. **持续对齐版的 E3。** 生成器全程跟着一个**始终干净**的 θ_g 训练（500 轮 ≈
+   1500 步），而 E3 只在最终快照上练 30 步。这是白盒 δ 的最强形态。
+
+| 设定 | 全局模型见过投毒更新吗 | 生成器对齐的是什么 |
+|---|---|---|
+| bad=1 (fedavg) | 是 | 被逐步污染的 θ_g |
+| **oracle_exclude** | **一次都没有** | **持续对齐的干净 θ_g** |
+| E3 | 否 | 最终干净模型，仅 30 步 |
+| E2 | 否 | **另一条**被污染轨迹的 θ_g |
+
+它**不是**一种可实现的防御——掩码直接读 `client.diag_is_malicious`，用了
+现实中没有的标签。图里用黑色，和其余曲线在语义上分开（`DEFENSE_STYLE`）。
+
 #### 实验 F：冻结生成器的时间衰减矩阵
 
 **前提**：需要按轮次的快照。attack run 必须带 `--snapshot-every` 跑过，
@@ -290,7 +327,7 @@ python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 ### 3.7 跑测试
 
 ```bash
-python -m diag.tests.run_tests           # 266 个单元测试，约 30 秒
+python -m diag.tests.run_tests           # 291 个单元测试，约 15 秒
 python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 # 装了 pytest 的环境可直接：pytest diag/tests
 ```
@@ -497,6 +534,8 @@ ResNet 的 BN 键全部匹配这两个模式（`resnet.py:22,25,32`）。
 | **全局模型 ASR 用的是借 BN 的版本** | 直接评估 `global.pt` 得到的是失配模型（§4b）。`acc_global_raw` 一并落盘，退化程度可见 |
 | **个性化模型的陈旧度** | 评估的是一组固定良性客户端，它们的模型停在各自上次参与的那一轮 —— 这正是论文 ASR 的定义。`n_eval_clients_participated_this_round` 作协变量记录 |
 | **评估是否扰动训练** | 第一版实现**会**扰动（评估里 `get_resnet()` 消耗全局 RNG，只有恶意客户端与生成器受影响，良性客户端毫无变化——极易被误读成"防御生效了"）。已修复并加了回归测试，见 `PATCHES.md` 埋点 7。正式规模仍建议用 `--verify-against` 复核一次 |
+| **`oracle_exclude` 不是防御** | 它的掩码直接读 `diag_is_malicious`，用了现实中没有的标签。它是**排除类防御的上界** + **流水线的负对照**，报告时不得与 FLAME / Multi-Krum 并列成"一种方法" |
+| **`oracle_exclude` 只在冒烟规模跑过** | 2 轮 / 4 客户端上确认了 TPR=1.0、FPR=0.0、`influence_malicious_mean=0.0`，良性 `asr_personalized_targeted` 两轮都是 0。**2 轮说明不了后门能不能植入**，这一组的正式结论必须等 500 轮的 run |
 | **GPU 路径无法在本容器验证** | 本容器只有 CPU。第一版的 float64 累加器全建在 CPU 上，在集群 GPU 上直接崩（`Expected all tensors to be on the same device`）。已系统性修复 11 处，并加了 `test_all_defenses_run_on_cuda_when_available`——**它在本地空转，在集群上才真跑**。`meta` 设备无法替代（`meta + cpu` 不报错，且 `bincount` 未实现），所以**上集群前务必先跑一次这个测试** |
 
 ---
@@ -543,7 +582,7 @@ pandas 3.0.5 / scipy 1.17.1 / matplotlib 3.11.1 / pyyaml 6.0.1
 # torchvision: 未安装（正式实验必需）
 # pytest: 未安装（用 diag/tests/run_tests.py 代替）
 
-# 单元测试（190 个，约 70 秒）
+# 单元测试（291 个，约 15 秒）
 python -m diag.tests.run_tests
 python -m diag.tests.run_tests exp_f      # 只跑某个模块
 

@@ -83,6 +83,8 @@ IMPLANTATION_COLUMNS = [
     "mask_keep_ratio", "effective_trim_n", "zero_sign_ratio",
     "n_malicious_this_round", "rounds_since_last_malicious",
     "n_eval_clients", "n_eval_clients_participated_this_round",
+    # 正对照（--eval-include-malicious）：恶意客户端自己的模型
+    "acc_malicious_own", "asr_malicious_own", "n_eval_malicious",
 ]
 
 
@@ -111,6 +113,7 @@ class TrainingTracker:
     seed: int = 0
     eval_every: int = 0
     eval_client_ids: Sequence[int] = field(default_factory=tuple)
+    eval_malicious_ids: Sequence[int] = field(default_factory=tuple)
     generator_getter: Optional[Any] = None
     probe: Any = None
     target_class: int = 0
@@ -276,9 +279,16 @@ class TrainingTracker:
         selected_ids = {int(clients[i].cid) for i in self.selected_indices}
         participated = sum(1 for c in eval_clients if int(c.cid) in selected_ids)
 
-        def _mean(key: str) -> float:
-            values = [r[key] for r in rows if np.isfinite(r[key])]
+        def _mean(key: str, source=rows) -> float:
+            values = [r[key] for r in source if np.isfinite(r[key])]
             return float(np.mean(values)) if values else float("nan")
+
+        # 正对照：恶意客户端自己的个性化模型。它是直接在投毒数据上训练的，
+        # ASR 应当很高 —— 若它也低，说明投毒本身没生效，而不是防御起了作用。
+        malicious_clients = [by_id[int(i)] for i in self.eval_malicious_ids
+                             if int(i) in by_id]
+        malicious_rows = [self._evaluate_model(c.local_model)
+                          for c in malicious_clients]
 
         malicious_now = sum(
             1 for i in self.selected_indices
@@ -302,6 +312,9 @@ class TrainingTracker:
                 if self.last_malicious_round is not None else -1),
             "n_eval_clients": len(eval_clients),
             "n_eval_clients_participated_this_round": participated,
+            "acc_malicious_own": _mean("acc", malicious_rows),
+            "asr_malicious_own": _mean("asr_targeted", malicious_rows),
+            "n_eval_malicious": len(malicious_clients),
         })
 
     # -- 产出 -------------------------------------------------------------

@@ -171,7 +171,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            results_dir: Optional[str] = None,
            bad_client_num: Optional[int] = None,
            total_round: Optional[int] = None,
-           run_tag: str = "") -> Path:
+           run_tag: str = "",
+           oracle_inner: str = "fedavg",
+           eval_include_malicious: bool = False) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -374,6 +376,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
 
         benign_ids = sorted(int(c.cid) for c in clients
                             if not bool(getattr(c, "diag_is_malicious", False)))
+        malicious_ids = sorted(int(c.cid) for c in clients
+                               if bool(getattr(c, "diag_is_malicious", False)))
         n_eval = min(10, len(benign_ids))
         probe = None
         if eval_every > 0:
@@ -395,6 +399,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             tau=tau, trim_alpha=trim_alpha, alpha_dirichlet=float(alpha),
             seed=int(seed), eval_every=int(eval_every),
             eval_client_ids=benign_ids[:n_eval],
+            # 正对照：恶意客户端**自己**的模型是被投毒的，其 ASR 应当很高。
+            # 少了它，"良性 ASR 在基线"既可能是排除成功、也可能是投毒根本没生效。
+            eval_malicious_ids=(malicious_ids if eval_include_malicious else ()),
             generator_getter=((lambda: generator) if generator is not None
                               else None),
             probe=probe, target_class=target_class, num_classes=num_classes)
@@ -408,8 +415,17 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         # 由 test_fedavg_matches_repo_agg_avg 保证。
         needs_takeover = defense != "fedavg" or bool(instrument_dir)
         if needs_takeover:
+            # oracle_exclude 要按真实标签剔除，因此需要当轮选中客户端的恶意掩码。
+            # 掩码的顺序必须与 fl_process.py:36 上传 state_dict 的顺序一致 ——
+            # 两者都来自同一个 client_indices，OracleExclude 内部还会校验长度。
+            def _malicious_mask():
+                return np.array(
+                    [bool(getattr(clients[i], "diag_is_malicious", False))
+                     for i in tracker.selected_indices], dtype=bool)
+
             rule = build_defense(defense, tau=tau, trim_alpha=trim_alpha,
-                                 seed=seed)
+                                 seed=seed, inner=oracle_inner,
+                                 malicious_getter=_malicious_mask)
             restore_defense = use_defense(
                 server, rule,
                 on_round=lambda outcome, states, w_prev: tracker.on_aggregate(
@@ -547,6 +563,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--run-tag", default="",
                         help="附加到 checkpoint 目录名与 run_id 后的后缀，"
                              "例如 bad1 -> attack_a0.5_s0_bad1")
+    parser.add_argument("--oracle-inner", default="fedavg",
+                        choices=[d for d in DEFENSES if d != "oracle_exclude"],
+                        help="--defense oracle_exclude 剔除恶意后用哪个规则聚合"
+                             "剩下的；缺省 fedavg（攻击者已完美剔除，"
+                             "再叠一层防御会把两件事混在一起）")
+    parser.add_argument("--eval-include-malicious", action="store_true",
+                        help="额外评估恶意客户端**自己**的模型（正对照）。"
+                             "静默恶意那一组必须开 —— 否则'良性 ASR 在基线'"
+                             "既可能是排除成功、也可能是投毒没生效")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -558,7 +583,9 @@ def main(argv: Optional[List[str]] = None) -> int:
            defense_trim_alpha=args.defense_trim_alpha,
            eval_every=args.eval_every, instrument_dir=args.instrument_dir,
            results_dir=args.results_dir, bad_client_num=args.bad_client_num,
-           total_round=args.total_round, run_tag=args.run_tag)
+           total_round=args.total_round, run_tag=args.run_tag,
+           oracle_inner=args.oracle_inner,
+           eval_include_malicious=args.eval_include_malicious)
     return 0
 
 

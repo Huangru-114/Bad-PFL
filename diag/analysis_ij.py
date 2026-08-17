@@ -49,6 +49,8 @@ DEFENSE_STYLE: Dict[str, Tuple[str, str]] = {
     "invariant": ("Invariant Aggregator", "tab:blue"),
     "invariant_mask_only": ("Invariant: AND-mask only", "tab:cyan"),
     "invariant_trim_only": ("Invariant: trimmed-mean only", "tab:brown"),
+    # 上界对照：不是一种可实现的防御，用黑色虚线的语义与其余曲线区分开
+    "oracle_exclude": ("Oracle exclusion (silent attacker)", "black"),
 }
 GROUP_COLOR = {"malicious": "tab:red", "benign": "tab:blue"}
 
