@@ -168,7 +168,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            defense_trim_alpha: Optional[float] = None,
            eval_every: int = 0,
            instrument_dir: Optional[str] = None,
-           results_dir: Optional[str] = None) -> Path:
+           results_dir: Optional[str] = None,
+           bad_client_num: Optional[int] = None,
+           total_round: Optional[int] = None,
+           run_tag: str = "") -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -197,6 +200,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     if mode not in ("clean", "attack"):
         raise ValueError(f"mode 必须是 'clean' 或 'attack'，收到 '{mode}'")
 
+    # CLI 的显式覆盖优先于 config；两者都没有才用 config 的默认值。
+    bad_override, round_override = bad_client_num, total_round
     if smoke:
         smoke_cfg = cfg.smoke
         client_num = int(smoke_cfg.num_clients)
@@ -215,6 +220,17 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         total_round = int(fl_cfg.total_round)
         batch_size = int(fl_cfg.batch_size)
         device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    if bad_override is not None:
+        if not 0 <= int(bad_override) <= client_num:
+            raise ValueError(
+                f"bad_client_num={bad_override} 超出 [0, {client_num}]")
+        bad_client_num = int(bad_override)
+    if round_override is not None:
+        total_round = int(round_override)
+    if mode == "clean" and bad_client_num and bad_override is not None:
+        print(f"[run_fl] 注意：clean 模式下 bad_client_num={bad_client_num} "
+              f"只影响'恶意槽位'的标记，不会投毒")
 
     torch_device = torch.device(device)
     target_class = int(cfg.data.target_class)
@@ -302,7 +318,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     eval_func = None
     generator_handler = None
     ckpt_root = Path(ckpt_root or cfg.paths.ckpt_root)
-    ckpt_dir = ckpt_root / run_dir_name(mode, alpha, seed)
+    # run_tag 让"只改了 bad_client_num / total_round"的扫描各自落在独立目录，
+    # 否则不同恶意密度的 run 会互相覆盖 —— 而且覆盖是静默的。
+    base_name = run_dir_name(mode, alpha, seed) + (f"_{run_tag}" if run_tag else "")
+    ckpt_dir = ckpt_root / base_name
     if mode == "attack":
         # clean run 完全跳过 use_our_attack —— 不是构造空的攻击对象。
         # 原实现在没有 PoisonClient 时会 UnboundLocalError（eval_func 未赋值），
@@ -343,7 +362,7 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
               f"× {len(snapshot_client_ids)} 个客户端 -> {ckpt_dir}/round_XXXX/")
 
     # --- 6c. 防御与逐轮埋点（实验 I / J） ---------------------------------
-    run_id = f"{defense}_{run_dir_name(mode, alpha, seed)}"
+    run_id = f"{defense}_{base_name}"
     tracker = None
     restore_defense = None
     if defense != "fedavg" or eval_every > 0 or instrument_dir:
@@ -465,7 +484,7 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             "total_rounds": total_round,
             "seed": int(seed),
             "alpha": float(alpha),
-            "run_id": run_dir_name(mode, alpha, seed),
+            "run_id": base_name,
         })
     print(f"[run_fl] mode={mode} alpha={alpha} seed={seed} -> {ckpt_dir}")
 
@@ -519,6 +538,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="逐轮 npz 的落盘根目录；不给则不记录")
     parser.add_argument("--results-dir", default=None,
                         help="植入过程 CSV 的输出目录；缺省 results/raw")
+    parser.add_argument("--bad-client-num", type=int, default=None,
+                        help="覆盖 config 的恶意客户端数（实验 I §4.3 / "
+                             "论文的恶意密度消融）。改了它务必同时给 --run-tag，"
+                             "否则不同密度的 run 会静默互相覆盖")
+    parser.add_argument("--total-round", type=int, default=None,
+                        help="覆盖 config 的总轮数")
+    parser.add_argument("--run-tag", default="",
+                        help="附加到 checkpoint 目录名与 run_id 后的后缀，"
+                             "例如 bad1 -> attack_a0.5_s0_bad1")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -529,7 +557,8 @@ def main(argv: Optional[List[str]] = None) -> int:
            defense=args.defense, defense_tau=args.defense_tau,
            defense_trim_alpha=args.defense_trim_alpha,
            eval_every=args.eval_every, instrument_dir=args.instrument_dir,
-           results_dir=args.results_dir)
+           results_dir=args.results_dir, bad_client_num=args.bad_client_num,
+           total_round=args.total_round, run_tag=args.run_tag)
     return 0
 
 

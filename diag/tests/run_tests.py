@@ -37,6 +37,7 @@ TEST_MODULES = [
     "diag.tests.test_invariant_agg",
     "diag.tests.test_instrumentation",
     "diag.tests.test_defenses",
+    "diag.tests.test_analysis_ij",
 ]
 
 

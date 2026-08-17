@@ -43,6 +43,7 @@ DETECTION_COLUMNS = [
     "malicious_rank_cos_mean",
     "flame_n_clusters", "flame_n_noise", "flame_max_cluster_size",
     "flame_fallback_triggered", "clip_rate_malicious", "clip_rate_benign",
+    "cos_to_others_malicious_mean", "cos_to_others_benign_mean",
 ]
 
 
@@ -132,6 +133,12 @@ def detection_table(records: Sequence[Dict[str, Any]], *,
             clipped = np.asarray(extra["clipped"], dtype=bool)
             row["clip_rate_malicious"] = _group_mean(clipped.astype(float), malicious)
             row["clip_rate_benign"] = _group_mean(clipped.astype(float), benign)
+        if "cos_to_others_mean" in extra:
+            # FLAME 聚类环节的直接证据（实验 J §4.2）：恶意与良性的余弦分布
+            # 若重叠，聚类那一环就没有信号可用。
+            cosine = np.asarray(extra["cos_to_others_mean"], dtype=float)
+            row["cos_to_others_malicious_mean"] = _group_mean(cosine, malicious)
+            row["cos_to_others_benign_mean"] = _group_mean(cosine, benign)
         for key in ("flame_n_clusters", "flame_n_noise", "flame_max_cluster_size",
                     "flame_fallback_triggered"):
             if key in extra:
