@@ -39,6 +39,7 @@ TEST_MODULES = [
     "diag.tests.test_defenses",
     "diag.tests.test_analysis_ij",
     "diag.tests.test_analysis_density",
+    "diag.tests.test_analysis_exposure",
 ]
 
 

@@ -111,31 +111,40 @@ def load_implantation(pattern: str,
 
 def tail_summary(frame: pd.DataFrame, tail: int = 5,
                  asr_column: str = "asr_personalized_targeted",
-                 acc_column: str = "acc_personalized") -> pd.DataFrame:
-    """每个 (defense, bad_client_num, seed) 取**末尾 tail 轮**的均值，再跨 seed 汇总。
+                 acc_column: str = "acc_personalized",
+                 group_by: Sequence[str] = ("defense", "bad_client_num")
+                 ) -> pd.DataFrame:
+    """每个 run 取**末尾 tail 轮**的均值，再按 ``group_by`` 跨 seed 汇总。
 
     两级聚合是刻意的：先在 run 内部把尾部轮次压成一个数（消掉轮间抖动），
     再跨 seed 求均值与 std。直接把所有尾部行混在一起做 std，会把 run 内的
     自相关抖动当成 seed 间差异。
+
+    ``group_by`` 决定第二级怎么并。默认 ``(defense, bad_client_num)`` —— 同一
+    格子的多个 seed 并成一行。图 J-6 要的是这个。把 ``run_id`` 加进去就变成
+    一行一个 run（``analysis_exposure`` 要按 run 与 E 对齐时用）。
     """
+    group_by = list(group_by)
     for column in ("round", "defense", "bad_client_num", "seed",
-                   asr_column, acc_column):
+                   asr_column, acc_column, *group_by):
         if column not in frame.columns:
             raise KeyError(f"植入 CSV 缺列 '{column}'；实际列：{list(frame.columns)}")
 
+    run_keys = list(dict.fromkeys([*group_by, "seed"]))
     per_run: List[Dict[str, Any]] = []
     short_runs: List[str] = []
-    for (defense, bad, seed), group in frame.groupby(
-            ["defense", "bad_client_num", "seed"], sort=True):
+    for values, group in frame.groupby(run_keys, sort=True):
+        values = values if isinstance(values, tuple) else (values,)
+        labels = dict(zip(run_keys, values))
         group = group.sort_values("round")
         if len(group) < tail:
-            short_runs.append(f"{defense} bad={bad} seed={seed}"
-                              f"（只有 {len(group)} 个评估行，需要 {tail}）")
+            short_runs.append(
+                f"{labels}（只有 {len(group)} 个评估行，需要 {tail}）")
             continue
         block = group.iloc[-tail:]
         per_run.append({
-            "defense": str(defense), "bad_client_num": int(bad),
-            "seed": int(seed),
+            **{k: (int(v) if k in ("bad_client_num", "seed") else str(v))
+               for k, v in labels.items()},
             "asr": float(block[asr_column].mean()),
             "acc": float(block[acc_column].mean()),
             # 同一条轨迹内的离散度。**不是不确定度**，只用来发现尾部还没稳定。
@@ -151,10 +160,11 @@ def tail_summary(frame: pd.DataFrame, tail: int = 5,
 
     runs = pd.DataFrame(per_run)
     rows: List[Dict[str, Any]] = []
-    for (defense, bad), group in runs.groupby(["defense", "bad_client_num"]):
+    for values, group in runs.groupby(group_by):
+        values = values if isinstance(values, tuple) else (values,)
         n_seeds = int(len(group))
         rows.append({
-            "defense": defense, "bad_client_num": int(bad),
+            **dict(zip(group_by, values)),
             "asr_mean": float(group["asr"].mean()),
             "acc_mean": float(group["acc"].mean()),
             # 跨 seed 的 std —— 只有 >=2 个 seed 时才有定义，才配当误差棒
@@ -167,8 +177,7 @@ def tail_summary(frame: pd.DataFrame, tail: int = 5,
             "last_round": int(group["last_round"].max()),
             "seeds": ",".join(str(s) for s in sorted(group["seed"])),
         })
-    return pd.DataFrame(rows).sort_values(
-        ["defense", "bad_client_num"]).reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values(group_by).reset_index(drop=True)
 
 
 def accuracy_cost(summary: pd.DataFrame,

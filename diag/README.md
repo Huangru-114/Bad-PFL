@@ -63,6 +63,7 @@
 | `exp_ij.py` | 实验 I/J 的汇总：检出指标 / 名次分布 / ΔT 衰减 / 消融判据 | `detection_table`, `ranks_table`, `decay_table`, `ablation_verdict` | CLI |
 | `analysis_ij.py` | 实验 I/J 的五张图（J-1..J-5），配色在 I/J 间共用 | `plot_j1..j5`, `DEFENSE_STYLE` | CLI |
 | `analysis_density.py` | 图 J-6：ACC/ASR × 恶意客户端数 + 每 ASR 点的 ACC 代价 | `load_implantation`, `tail_summary`, `accuracy_cost`, `plot_density` | CLI |
+| `analysis_exposure.py` | **步骤 0**：ASR vs 累积吸收的恶意幅度 E（坍缩图） | `round_exposure`, `exposure_by_run`, `join_with_asr`, `collapse_diagnosis`, `plot_exposure` | CLI |
 | `run_density_sweep.py` | 恶意密度扫描的命令生成器（**默认 dry-run**） | `build_commands`, `expected_gap` | CLI |
 
 ### 测试
@@ -81,6 +82,7 @@
 | `tests/test_exp_e.py` | 实验 E：双指标的分子分母、real_target 空分母、E3 不污染 clean 模型 |
 | `tests/test_analysis_e.py` | 实验 E 的汇总与绘图 + **「图中禁止中文」的强制检查** |
 | `tests/test_analysis_density.py` | 图 J-6：密度来源优先级、两级聚合、缺格断线、代价无定义时留空 |
+| `tests/test_analysis_exposure.py` | E 的权重：五种防御的分母逐个手算；裁剪必须进 E；坍缩判据不把噪声报成阈值 |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -341,6 +343,38 @@ python -m diag.analysis_density \
 `--paper-asr` / `--paper-bad-num` 可以叠一个论文数值的**单点星号标记** ——
 不画横线，因为论文的数字只对它自己那个密度成立。
 
+### 3.5c 步骤 0：ASR vs 累积吸收的恶意幅度 E
+
+```bash
+python -m diag.analysis_exposure \
+    --instrument-root instrumentation \
+    --implantation-glob "results/raw/exp_ij_implantation_*.csv" \
+    --out results/figs/exp_exposure.png \
+    --summary-out results/exp_exposure.csv
+```
+
+**不需要重训** —— 全部从已有的 `round_*.npz` 里算。
+
+按次数计数不自洽：fedavg bad=1 漏 47 次（未裁剪）→ ASR > 0.80，而 FLAME bad=5
+漏 107 次 → ASR ≈ 0.30。差别在于 FLAME 把恶意更新裁到中位范数，**漏过去的
+幅度被削掉了**。所以自变量是幅度：
+
+    E = Σ_t Σ_{k∈mal} w_k(t)·‖g_k(t)‖ ,   w_k = I_k·s_k / D
+
+`D` 是该防御聚合式的分母，逐防御给出（fedavg→N，median→2，二元决策→被选中数，
+invariant→`effective_trim_n`），所以 **FLAME 的裁剪与 Invariant 的掩码这两种
+"不排除、只削弱"的机制会如实进入 E**，而按次数计数完全看不见它们。
+
+两条随图一起报的限制，代码里强制：
+
+- **E 是上界。** 埋点只存了 `‖g_k‖`，没存向量，方向抵消扣不掉。
+- **median / invariant 的 E 是近似**（逐坐标取舍被标量化）。CSV 有
+  `exposure_is_exact` 列，图上是空心方块，**不要和实心圆混在一起做回归**。
+
+判据只报 Spearman ρ 与跨防御一致性，**不拟合曲线** —— 十几个格子上任何参数化
+拟合都只是在描述噪声。阈值只在按 E 排序后 ASR 恰好穿越 0.5 **一次**时才给，
+多次穿越返回"不报"。
+
 ### 3.6 扫描矩阵（**默认 dry-run**）
 
 ```bash
@@ -359,7 +393,7 @@ python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 ### 3.7 跑测试
 
 ```bash
-python -m diag.tests.run_tests           # 307 个单元测试，约 25 秒
+python -m diag.tests.run_tests           # 327 个单元测试，约 30 秒
 python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 # 装了 pytest 的环境可直接：pytest diag/tests
 ```
@@ -614,7 +648,7 @@ pandas 3.0.5 / scipy 1.17.1 / matplotlib 3.11.1 / pyyaml 6.0.1
 # torchvision: 未安装（正式实验必需）
 # pytest: 未安装（用 diag/tests/run_tests.py 代替）
 
-# 单元测试（307 个，约 25 秒）
+# 单元测试（327 个，约 30 秒）
 python -m diag.tests.run_tests
 python -m diag.tests.run_tests exp_f      # 只跑某个模块
 
