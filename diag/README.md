@@ -65,6 +65,10 @@
 | `analysis_density.py` | 图 J-6：ACC/ASR × 恶意客户端数 + 每 ASR 点的 ACC 代价 | `load_implantation`, `tail_summary`, `accuracy_cost`, `plot_density` | CLI |
 | `analysis_exposure.py` | **步骤 0**：ASR vs 累积吸收的恶意幅度 E（坍缩图） | `round_exposure`, `exposure_by_run`, `join_with_asr`, `collapse_diagnosis`, `plot_exposure` | CLI |
 | `run_density_sweep.py` | 恶意密度扫描的命令生成器（**默认 dry-run**） | `build_commands`, `expected_gap` | CLI |
+| `schedule.py` | 攻击调度（实验 1B）：六种时间结构 + 门控 | `AttackSchedule`, `gate_attack`, `SCHEDULES` | `run_fl` |
+| `run_exp1.py` | 实验 1/1B 的命令生成器（**默认 dry-run**，十字扫描） | `dose_points`, `build_commands`, `estimate_cost` | CLI |
+| `analysis_exp1.py` | 实验 1/1B 的六张图 + 阈值判据（含零假设） | `crossing_table`, `threshold_verdict`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
+| `represent.py` | 表征指标（从 checkpoint **离线**算） | `embed`, `representation_row`, `representation_table` | CLI |
 
 ### 测试
 
@@ -83,6 +87,9 @@
 | `tests/test_analysis_e.py` | 实验 E 的汇总与绘图 + **「图中禁止中文」的强制检查** |
 | `tests/test_analysis_density.py` | 图 J-6：密度来源优先级、两级聚合、缺格断线、代价无定义时留空 |
 | `tests/test_analysis_exposure.py` | E 的权重：五种防御的分母逐个手算；裁剪必须进 E；坍缩判据不把噪声报成阈值 |
+| `tests/test_schedule.py` | 六种调度的边界轮次逐个钉死；after_mta 的锁存与一轮一判 |
+| `tests/test_analysis_exp1.py` | 阈值判据的两个方向 + **MTA 饱和假阳性的回归测试**；1B 剂量必须固定 |
+| `tests/test_represent.py` | 配对距离不得截断；`trigger_pull` 的符号 |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -375,6 +382,84 @@ invariant→`effective_trim_n`），所以 **FLAME 的裁剪与 Invariant 的掩
 拟合都只是在描述噪声。阈值只在按 E 排序后 ASR 恰好穿越 0.5 **一次**时才给，
 多次穿越返回"不报"。
 
+### 3.5d 正式实验 1 / 1B（攻击剂量与有效边界）
+
+**先确认一件事**：本仓库**一直**在用 FedBN（`config.yaml` 的 `fl.pfl: fedbn`
+→ `run_fl.py` 调 `use_fedbn(server)`），BN 从不聚合。`--defense fedavg` 指的是
+**共享参数的聚合规则**，所以「FedBN + 不设防」就是 `--defense fedavg`。
+
+```bash
+python -m diag.run_exp1                # 打印命令，不执行
+python -m diag.run_exp1 --stage 1b     # 只看 1B 的六种调度
+python -m diag.run_exp1 --execute      # 真跑（第一阶段 14 + 12 = 26 个 run）
+
+python -m diag.analysis_exp1 \
+    --implantation-glob "results/raw/exp_ij_implantation_e1*.csv" \
+    --out-dir results/figs --summary-prefix results/exp1
+```
+
+⚠️ **换设定，不是延续**：`exp1` 用 40 客户端 / ResNet-18 / 200 轮，而实验 A–J
+是 100 客户端 / ResNet-10 / 1000 轮。**此前所有 I/J 的数字都不再可比**，
+不要把两批结果画在同一张图上。
+
+#### 扫描是十字形的，不是全因子
+
+固定 ρ_p 扫 N_m，再固定 N_m 扫 ρ_p，交叉点共用一个 run：4+4−1 = 7 个点 ×
+2 seed = 14 个 run，而全因子是 32 个。确认过渡区在哪之后再用 `--full-grid`
+在那一小块上补全。
+
+**ρ_p 是逐样本的伯努利概率，不是精确比例**（`fba.py:49` 的
+`torch.rand(...) <= poison_ratio`）。batch=32 时 ρ_p=0.1 有约 3.4% 的批次一个
+毒样本都没有 —— 报告里写"投毒比例"时要说明。
+
+#### 六种调度（1B）
+
+`continuous` / `burst` / `intermittent` / `after_mta` / `early` / `late`。
+门控**同时**关掉投毒与生成器训练 —— 只关投毒、留着生成器继续训练，等于给攻击者
+一个"停手但仍在侦察"的能力，那不是 `early` 想问的问题。
+
+- `continuous` **完全不装包装器**，所以默认设定与本机制出现之前逐位一致；
+- `after_mta` 触发后**锁存**，且需要 `--eval-every > 0`（MTA 只在评估轮算得出来，
+  关掉评估会静默退化成"从不攻击"，所以直接报错）；
+- 判定**一轮只做一次**，否则落盘的 `attack_active_this_round` 会与实际投毒差一轮。
+
+**调度之间的 RNG 流必然发散**（一旦某轮数据不同，之后全部不同）。这是原理上的，
+不是实现缺陷 —— 所以调度比较**必须靠多 seed**，不能靠单次 run 的逐位可比。
+
+#### ASR vs MTA：一个会骗人的统计量
+
+单个 run 里 MTA 随 t 单调上升，所以 `ASR~MTA` 与 `ASR~t` 是同一张图换了个横轴。
+更麻烦的是 **MTA(t) 会饱和**：训练后期一大段轮次映射到很窄的一段 MTA，于是即便
+起飞完全由剂量决定，"越过时的 MTA"也会机械地显得很集中。
+
+`threshold_verdict` 因此带一个**零假设**：把观测到的 `round_at_cross` 喂进各 run
+汇总的 MTA(t) 中位曲线，得到"纯时间驱动时会有多集中"。只有实测比这个零假设**还要**
+明显更紧，MTA 才算带来了轮次之外的信息。（这个假阳性是在合成数据上实测到的，
+有回归测试 `test_saturating_mta_alone_does_not_count_as_a_threshold` 盯着。）
+
+即便如此，那仍然只是**相关性证据**。能分开 `t→MTA` 与 `MTA→ASR` 的是
+`onset_analysis`：不同调度让攻击在不同 MTA 水平上开始，同时可以控住投毒轮数。
+
+#### 逐轮记录的内容
+
+主任务 `clean_loss` / `mta` / `acc_target_class`（个性化 + 全局各一份）；
+后门逐 edge 的 ACC/ASR 另存 `exp_ij_edge_*.csv`；参数侧 `global_update_norm` /
+`layer_update_norm` / `layer_cos_centroid` / 三种分组余弦（`--layer-metrics`）。
+
+**`mta` 与既有的 `acc` 不是同一个数**：`acc` 是非目标类样本上的准确率（与 ASR
+分母同口径），`mta` 是全部样本上的。两个都记、各自命名。
+
+表征指标从 checkpoint 离线算（需要 `--snapshot-every`）：
+
+```bash
+python -m diag.represent --ckpt-dir checkpoints/attack_a0.5_s0_e1_bad4_rho0p5_s0 \
+       --out results/exp1_representation.csv
+```
+
+主指标是 **`trigger_pull`**（= 干净样本到目标类原型的距离 − 加触发器后的距离），
+不是 `trigger_repr_distance` 的绝对值 —— 绝对距离受特征尺度影响，不同轮次能差
+好几倍，直接比会把"特征整体变大了"读成"后门变强了"。
+
 ### 3.6 扫描矩阵（**默认 dry-run**）
 
 ```bash
@@ -393,7 +478,7 @@ python -m diag.run_matrix --stage train  # 只看 24 条训练命令
 ### 3.7 跑测试
 
 ```bash
-python -m diag.tests.run_tests           # 327 个单元测试，约 30 秒
+python -m diag.tests.run_tests           # 376 个单元测试，约 25 秒
 python -m diag.tests.smoke_integration   # 端到端集成冒烟，约 1 分钟
 # 装了 pytest 的环境可直接：pytest diag/tests
 ```
@@ -648,7 +733,7 @@ pandas 3.0.5 / scipy 1.17.1 / matplotlib 3.11.1 / pyyaml 6.0.1
 # torchvision: 未安装（正式实验必需）
 # pytest: 未安装（用 diag/tests/run_tests.py 代替）
 
-# 单元测试（327 个，约 30 秒）
+# 单元测试（376 个，约 25 秒）
 python -m diag.tests.run_tests
 python -m diag.tests.run_tests exp_f      # 只跑某个模块
 

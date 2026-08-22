@@ -280,7 +280,8 @@ _is_bn_key = is_fedbn_private_key
 
 def load_snapshot_model(run_dir: Path, round_number: int, *, kind: str,
                         client_id: Optional[int], num_classes: int, device,
-                        bn_donor_id: Optional[int] = None) -> nn.Module:
+                        bn_donor_id: Optional[int] = None,
+                        model_size: int = 10) -> nn.Module:
     """加载某一轮的模型快照。
 
     ``kind='personalized'`` 直接读 ``round_XXXX/client_{cid}.pt``。
@@ -303,7 +304,7 @@ def load_snapshot_model(run_dir: Path, round_number: int, *, kind: str,
     else:
         raise ValueError(f"未知 kind '{kind}'")
 
-    model = get_resnet(size=10, num_classes=num_classes)
+    model = get_resnet(size=int(model_size), num_classes=num_classes)
     model.load_state_dict(state, strict=True)
     model.to(device)
     model.device = device

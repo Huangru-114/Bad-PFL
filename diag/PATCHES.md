@@ -324,3 +324,39 @@ least two devices, cuda:0 and cpu!`
 - `torchvision` **未安装**，因此冒烟测试全程使用
   `diag/run_fl.py::SyntheticImageDataset` 合成数据。**正式实验需要 torchvision
   来加载 CIFAR-10。**
+
+### 埋点 10. 攻击调度与正式实验 1 的逐轮指标
+
+- **接入点**：`schedule.gate_attack` 包装 `client.poison_func`
+  （`client.py:124` 调用它）与 `registered_funcs["before_local_training"]` 里的
+  `trigger_gen_trainer`（`fba.py:63` 注册）。都是 diag 侧对客户端**对象**的
+  改写，原仓库文件不动，训练结束后 `restore()` 还原。
+- **`continuous` 不装任何包装器**：默认设定与本机制出现之前逐位一致。
+  有测试 `test_continuous_installs_no_wrapper_at_all` 盯着。
+- **调度之间的 RNG 流无法对齐**。一旦某一轮的训练数据不同，之后所有模型、
+  客户端采样、PGD 起点都不同。这是原理上的，不是实现缺陷。因此本模块
+  **不**为"关闭"的轮次空转消耗 RNG —— 那样既费一次 PGD 前后向，又只能对齐到
+  第一次分歧为止。**调度比较必须靠多 seed。**
+- **一轮只判定一次**（`active_for_round`）。`after_mta` 会锁存，所以"什么时候
+  问"会改变答案：轮首问（MTA 还是上一轮的）与轮尾问（MTA 已更新）可能不同。
+  不缓存的话，本轮实际有没有投毒、与落盘的 `attack_active_this_round`
+  就可能差一轮 —— 而那一轮正是 1B 最关心的。
+
+顺带修掉两个**写死 `size=10`** 的地方，它们在 `--model-size 18` 下会静默出错：
+
+| 位置 | 症状 |
+|---|---|
+| `track.py::_evaluate_now` | 用 ResNet-10 的空壳去 `load_state_dict` ResNet-18 的权重 |
+| `exp_f.py::load_snapshot_model` | 同上，实验 F 与离线表征分析都会踩到 |
+
+两处都改成从 `meta.json` / config 读 `model_size`。
+
+### 埋点 11. Gram 原语的去重
+
+`gram_matrix` / `pairwise_cosine` / `pairwise_distance` / `pseudo_grad_stack`
+原本在 `defenses.py` 里各有一份，而 `instrumentation.py` 也需要它们来算
+分组余弦。两处各写一份必然漂移，**而漂移是静默的**：FLAME 的簇与 Multi-Krum
+的分数会基于不同的距离，两张表看起来都对，并到一起才是错的。
+
+现在只在 `instrumentation.py` 定义一份，`defenses.py` 用别名 import
+保留旧的私有名，本文件其余部分不改。
