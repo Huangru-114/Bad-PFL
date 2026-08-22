@@ -62,6 +62,8 @@ from event_emitter import fl_event_emitter
 from fba import use_our_attack
 from fl_process import basic_fl_process
 from pfl import use_fedbn
+
+from .schedule import SCHEDULES, AttackSchedule, gate_attack
 from resnet import get_resnet
 from server import BasicServer
 from utils import client_inner_dirichlet_partition
@@ -173,7 +175,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            total_round: Optional[int] = None,
            run_tag: str = "",
            oracle_inner: str = "fedavg",
-           eval_include_malicious: bool = False) -> Path:
+           eval_include_malicious: bool = False,
+           client_num: Optional[int] = None,
+           select_per_round: Optional[int] = None,
+           local_steps: Optional[int] = None,
+           poison_rate: Optional[float] = None,
+           model_size: Optional[int] = None,
+           layer_metrics: bool = False,
+           schedule: Optional["AttackSchedule"] = None) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -203,7 +212,11 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         raise ValueError(f"mode 必须是 'clean' 或 'attack'，收到 '{mode}'")
 
     # CLI 的显式覆盖优先于 config；两者都没有才用 config 的默认值。
+    # 每个覆盖量都先存进 *_override，因为下面的 smoke / 正式两个分支会
+    # 无条件地把同名局部变量写掉。
     bad_override, round_override = bad_client_num, total_round
+    client_override, select_override = client_num, select_per_round
+    steps_override, poison_override = local_steps, poison_rate
     if smoke:
         smoke_cfg = cfg.smoke
         client_num = int(smoke_cfg.num_clients)
@@ -223,6 +236,17 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         batch_size = int(fl_cfg.batch_size)
         device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    # 规模参数要在 bad_client_num 校验之前生效，否则会拿旧的 client_num 去校验
+    if client_override is not None:
+        client_num = int(client_override)
+    if select_override is not None:
+        select_per_round = int(select_override)
+    if steps_override is not None:
+        local_steps = int(steps_override)
+    if select_per_round > client_num:
+        raise ValueError(
+            f"select_per_round={select_per_round} > client_num={client_num}")
+
     if bad_override is not None:
         if not 0 <= int(bad_override) <= client_num:
             raise ValueError(
@@ -236,8 +260,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
 
     torch_device = torch.device(device)
     target_class = int(cfg.data.target_class)
-    poison_rate = float(cfg.fl.poison_rate)
+    poison_rate = (float(poison_override) if poison_override is not None
+                   else float(cfg.fl.poison_rate))
+    if not 0.0 <= poison_rate <= 1.0:
+        raise ValueError(f"poison_rate={poison_rate} 必须在 [0, 1] 内")
     learning_rate = float(cfg.fl.learning_rate)
+    model_size = int(model_size if model_size is not None
+                     else cfg.fl.get("model_size", 10))
+    schedule = schedule if schedule is not None else AttackSchedule("continuous")
 
     # --- 1. 播种（torch + numpy + random 三条流） -------------------------
     seed_info = set_all_seeds(
@@ -278,8 +308,7 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     loss_func = torch.nn.CrossEntropyLoss()
 
     def model_factory():
-        return get_resnet(size=int(cfg.fl.get("model_size", 10)),
-                          num_classes=num_classes)
+        return get_resnet(size=model_size, num_classes=num_classes)
 
     clients: List[Any] = []
     n_benign = client_num - bad_client_num
@@ -398,6 +427,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             device=torch_device, defense_name=defense, variant=defense,
             tau=tau, trim_alpha=trim_alpha, alpha_dirichlet=float(alpha),
             seed=int(seed), bad_client_num=int(bad_client_num),
+            poison_rate=float(poison_rate) if mode == "attack" else 0.0,
+            schedule_kind=schedule.kind, layer_metrics=bool(layer_metrics),
+            model_size=model_size,
             eval_every=int(eval_every),
             eval_client_ids=benign_ids[:n_eval],
             # 正对照：恶意客户端**自己**的模型是被投毒的，其 ASR 应当很高。
@@ -448,6 +480,38 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
                 params = ""
             print(f"[run_fl] 防御 = {defense}{params}{note}")
 
+    # --- 6b. 攻击调度（实验 1B） -------------------------------------------
+    # 装在 use_our_attack 之后：门控的是它设好的 poison_func 与生成器 hook。
+    restore_schedule = None
+    schedule_handler = None
+    if mode == "attack" and schedule.kind != "continuous":
+        if schedule.kind == "after_mta" and int(eval_every) <= 0:
+            raise ValueError(
+                "after_mta 调度需要 --eval-every > 0：MTA 只在评估轮才算得出来，"
+                "关掉评估就永远触发不了，而那会静默地退化成'从不攻击'。")
+        _state = {"round": 0}
+
+        def _mta():
+            return tracker.last_mta if tracker is not None else None
+
+        restore_schedule = gate_attack(clients, schedule,
+                                       lambda: _state["round"], _mta)
+
+        def _on_round_begin_schedule(**kwargs):
+            if kwargs.get("server", None) is not server:
+                return
+            _state["round"] = int(kwargs["cur_round"])
+            active = schedule.active_for_round(_state["round"], _mta())
+            if tracker is not None:
+                tracker.attack_active = active
+
+        fl_event_emitter.on("on_round_begin", _on_round_begin_schedule)
+        schedule_handler = _on_round_begin_schedule
+        expected = schedule.expected_attack_rounds(total_round)
+        print(f"[run_fl] 攻击调度 = {schedule.describe()}"
+              + (f"，共 {expected}/{total_round} 轮投毒"
+                 if expected is not None else "，投毒轮数取决于训练过程"))
+
     # --- 7. 训练 ----------------------------------------------------------
     select_rule = make_select_rule(
         select_per_round, seed + int(cfg.determinism.select_rule_seed_offset))
@@ -455,6 +519,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         basic_fl_process(server, clients, local_steps=local_steps,
                          training_rounds=total_round, select_rule=select_rule)
     finally:
+        if schedule_handler is not None:
+            fl_event_emitter.off("on_round_begin", schedule_handler)
+        if restore_schedule is not None:
+            restore_schedule()
         fl_event_emitter.off("on_client_begin", count_participation)
         if generator_handler is not None:
             fl_event_emitter.off("on_round_end", generator_handler)
@@ -531,6 +599,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         frame.to_csv(out, index=False)
         print(f"[run_fl] 植入过程 {len(frame)} 行 -> {out}")
 
+        # 逐 edge 的行另存一份：均值会掩盖分布，而"每个 edge 的攻击成功率"
+        # 正是要看分布的（10 个 1.0 + 80 个 0.0 与全部 0.11 的均值一样）。
+        edges = tracker.edge_frame()
+        if not edges.empty:
+            edge_out = out_dir / f"exp_ij_edge_{run_id}.csv"
+            edges.to_csv(edge_out, index=False)
+            print(f"[run_fl] 逐 edge {len(edges)} 行 -> {edge_out}")
+
     if verify_against:
         ok, report = compare_run_checkpoints(Path(verify_against), ckpt_dir)
         print(report)
@@ -591,7 +667,39 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="额外评估恶意客户端**自己**的模型（正对照）。"
                              "静默恶意那一组必须开 —— 否则'良性 ASR 在基线'"
                              "既可能是排除成功、也可能是投毒没生效")
+    # --- 攻击剂量与规模（实验 1） ---
+    parser.add_argument("--client-num", type=int, default=None,
+                        help="客户端总数（覆盖 config 的 100）")
+    parser.add_argument("--select-per-round", type=int, default=None,
+                        help="每轮选中的客户端数")
+    parser.add_argument("--local-steps", type=int, default=None,
+                        help="本地训练步数（注意是 step 不是 epoch）")
+    parser.add_argument("--poison-rate", type=float, default=None,
+                        help="投毒比例 ρ_p ∈ [0,1]。注意它是**逐样本的伯努利"
+                             "概率**（fba.py:49 的 torch.rand），不是精确比例")
+    parser.add_argument("--model-size", type=int, default=None,
+                        choices=[10, 18, 34, 50, 101, 152],
+                        help="ResNet 规模，默认取 config 的 fl.model_size")
+    parser.add_argument("--layer-metrics", action="store_true",
+                        help="逐层更新范数与逐层余弦。要多扫一遍全部 key，"
+                             "ResNet-18 上明显变慢，默认关闭")
+    # --- 攻击调度（实验 1B） ---
+    parser.add_argument("--attack-schedule", default="continuous",
+                        choices=list(SCHEDULES))
+    parser.add_argument("--attack-start", type=int, default=0)
+    parser.add_argument("--attack-end", type=int, default=0)
+    parser.add_argument("--attack-length", type=int, default=0)
+    parser.add_argument("--attack-period", type=int, default=0)
+    parser.add_argument("--attack-duty", type=int, default=0)
+    parser.add_argument("--attack-mta-threshold", type=float,
+                        default=float("nan"))
     args = parser.parse_args(argv)
+
+    schedule = AttackSchedule(
+        kind=args.attack_schedule, start=args.attack_start,
+        end=args.attack_end, length=args.attack_length,
+        period=args.attack_period, duty=args.attack_duty,
+        mta_threshold=args.attack_mta_threshold)
 
     cfg = load_config(args.config)
     run_fl(cfg, args.mode, args.alpha, args.seed, smoke=args.smoke,
@@ -604,7 +712,11 @@ def main(argv: Optional[List[str]] = None) -> int:
            results_dir=args.results_dir, bad_client_num=args.bad_client_num,
            total_round=args.total_round, run_tag=args.run_tag,
            oracle_inner=args.oracle_inner,
-           eval_include_malicious=args.eval_include_malicious)
+           eval_include_malicious=args.eval_include_malicious,
+           client_num=args.client_num, select_per_round=args.select_per_round,
+           local_steps=args.local_steps, poison_rate=args.poison_rate,
+           model_size=args.model_size, layer_metrics=args.layer_metrics,
+           schedule=schedule)
     return 0
 
 

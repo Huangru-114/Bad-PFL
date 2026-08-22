@@ -50,6 +50,13 @@ import torch
 from .fedbn import split_keys
 from .instrumentation import (compose_influence, median_influence,
                               rank_window_fraction, trim_survival)
+# Gram 原语只在 instrumentation 里定义一份 —— 两处各写一份必然漂移，
+# 而漂移是静默的（FLAME 的簇和 Multi-Krum 的分数会基于不同的距离）。
+# 这里用别名保留旧的私有名，本文件其余部分不改。
+from .instrumentation import gram_matrix
+from .instrumentation import pairwise_cosine as _pairwise_cosine
+from .instrumentation import pairwise_distance as _pairwise_distance
+from .instrumentation import pseudo_grad_stack as _pseudo_grad_stack
 from .invariant_agg import (and_mask, sign_consistency, trim_count,
                             trimmed_mean)
 
@@ -94,45 +101,6 @@ class DefenseOutcome:
 # ---------------------------------------------------------------------------
 # 公共工具
 # ---------------------------------------------------------------------------
-def _pseudo_grad_stack(w_prev: Dict[str, torch.Tensor],
-                       state_dicts: Sequence[Dict[str, torch.Tensor]],
-                       key: str) -> torch.Tensor:
-    reference = w_prev[key].detach().to(torch.float32)
-    return torch.stack(
-        [reference - state[key].detach().to(reference.device, torch.float32)
-         for state in state_dicts], dim=0)
-
-
-def gram_matrix(w_prev: Dict[str, torch.Tensor],
-                state_dicts: Sequence[Dict[str, torch.Tensor]],
-                keys: Sequence[str]) -> torch.Tensor:
-    """``G[i,j] = <g_i, g_j>``，按 key 流式累加，不构造 ``[N, D]``。
-
-    两两距离与余弦都能从它导出（见模块 docstring）。用 float64 累加：
-    ResNet-10 上 D 接近 500 万，float32 的累加误差会污染余弦的第 3 位小数。
-    """
-    n_clients = len(state_dicts)
-    # 累加器留在 CPU：每个 key 只搬回一个 N×N 的小矩阵（模型在 GPU 上时，
-    # 若累加器也在 CPU 而 `flat @ flat.T` 在 GPU，就会抛设备不一致）。
-    gram = torch.zeros(n_clients, n_clients, dtype=torch.float64)
-    for key in keys:
-        flat = _pseudo_grad_stack(w_prev, state_dicts, key).reshape(
-            n_clients, -1).to(torch.float64)
-        gram += (flat @ flat.T).cpu()
-    return gram
-
-
-def _pairwise_distance(gram: torch.Tensor) -> torch.Tensor:
-    diagonal = gram.diagonal()
-    squared = diagonal[:, None] + diagonal[None, :] - 2.0 * gram
-    return squared.clamp(min=0.0).sqrt()
-
-
-def _pairwise_cosine(gram: torch.Tensor) -> torch.Tensor:
-    norms = gram.diagonal().clamp(min=1e-24).sqrt()
-    return gram / (norms[:, None] * norms[None, :])
-
-
 def _plain_mean(state_dicts: Sequence[Dict[str, torch.Tensor]], key: str
                 ) -> torch.Tensor:
     reference = state_dicts[0][key]

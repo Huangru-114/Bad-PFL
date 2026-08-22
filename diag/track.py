@@ -36,11 +36,13 @@ import torch
 
 from .config import Cfg
 from .defenses import DefenseOutcome
-from .fedbn import is_fedbn_private_key
-from .instrumentation import RoundRecord, RoundRecorder, round_signals
+from .fedbn import is_fedbn_private_key, split_keys
+from .instrumentation import (RoundRecord, RoundRecorder, gram_matrix,
+                              group_cosines, layer_signals, round_signals)
 from .invariant_agg import trim_count
 
-__all__ = ["TrainingTracker", "IMPLANTATION_COLUMNS", "preserve_rng_state"]
+__all__ = ["TrainingTracker", "IMPLANTATION_COLUMNS", "EDGE_COLUMNS",
+           "preserve_rng_state"]
 
 
 @contextlib.contextmanager
@@ -79,15 +81,27 @@ def preserve_rng_state():
 IMPLANTATION_COLUMNS = [
     # bad_client_num 必须落在数据里。跨密度并表时若只能从文件名解析 `_bad5`,
     # 一次改名或一个没打 tag 的 run 就会被静默归到错误的密度上。
-    "round", "defense", "bad_client_num",
+    "round", "defense", "bad_client_num", "poison_rate",
+    "schedule", "attack_active_this_round",
     "tau", "alpha", "alpha_dirichlet", "seed", "variant",
     "acc_global", "acc_global_raw", "acc_personalized",
     "asr_global_targeted", "asr_personalized_targeted", "asr_unfiltered",
+    # 主任务：mta 是全部样本上的准确率，acc_* 是非目标类样本上的（≠ mta）
+    "mta_personalized", "mta_global",
+    "clean_loss_personalized", "clean_loss_global",
+    "acc_target_class_personalized", "acc_target_class_global",
     "mask_keep_ratio", "effective_trim_n", "zero_sign_ratio",
     "n_malicious_this_round", "rounds_since_last_malicious",
     "n_eval_clients", "n_eval_clients_participated_this_round",
     # 正对照（--eval-include-malicious）：恶意客户端自己的模型
     "acc_malicious_own", "asr_malicious_own", "n_eval_malicious",
+]
+
+# 逐 edge（本仓库是扁平 FL，edge == 客户端）的评估行
+EDGE_COLUMNS = [
+    "round", "defense", "seed", "bad_client_num", "client_id", "is_malicious",
+    "participated_this_round", "acc", "mta", "clean_loss",
+    "acc_target_class", "asr_targeted", "asr_unfiltered",
 ]
 
 
@@ -117,6 +131,10 @@ class TrainingTracker:
     # 全局恶意客户端总数（不是当轮选中的恶意数，后者是 n_malicious_this_round）。
     # −1 表示调用方没传，跨密度分析会明确报错而不是猜。
     bad_client_num: int = -1
+    poison_rate: float = float("nan")
+    schedule_kind: str = "continuous"
+    # 逐层指标要多扫一遍全部 key（ResNet-18 上约 60 个），默认关闭
+    layer_metrics: bool = False
     eval_every: int = 0
     eval_client_ids: Sequence[int] = field(default_factory=tuple)
     eval_malicious_ids: Sequence[int] = field(default_factory=tuple)
@@ -124,12 +142,18 @@ class TrainingTracker:
     probe: Any = None
     target_class: int = 0
     num_classes: int = 10
+    model_size: int = 10
 
     # 运行时状态
     cur_round: int = 0
     selected_indices: Sequence[int] = field(default_factory=tuple)
     last_malicious_round: Optional[int] = None
     implantation_rows: List[Dict[str, Any]] = field(default_factory=list)
+    # 逐 edge（= 客户端）的评估行，一行一个 (round, client)
+    edge_rows: List[Dict[str, Any]] = field(default_factory=list)
+    last_mta: Optional[float] = None
+    # 本轮攻击是否开启，由 run_fl 每轮从 AttackSchedule 写入
+    attack_active: bool = True
     _handlers: List[Any] = field(default_factory=list)
 
     # -- 事件 -------------------------------------------------------------
@@ -186,6 +210,16 @@ class TrainingTracker:
             k = trim_count(len(state_dicts), self.trim_alpha)
         signals = round_signals(w_prev, state_dicts, trim_k=k)
 
+        # 分层与分组的参数指标。逐层要多扫一遍全部 key，ResNet-18 上不便宜，
+        # 所以由 --layer-metrics 显式打开，默认关闭。
+        layer: Dict[str, Any] = {}
+        groups: Dict[str, float] = {}
+        if self.layer_metrics:
+            layer = layer_signals(w_prev, state_dicts, malicious)
+            shared_float, _, _ = split_keys(state_dicts[0])
+            groups = group_cosines(
+                gram_matrix(w_prev, state_dicts, shared_float), malicious)
+
         self.recorder.write(RoundRecord(
             round_index=self.cur_round,
             client_ids=client_ids,
@@ -201,7 +235,15 @@ class TrainingTracker:
             n_malicious_in_round=int(malicious.sum()),
             n_selected=len(state_dicts),
             defense=self.defense_name,
-            extra={**outcome.extra,
+            # 全局更新范数 = 各客户端伪梯度均值的范数（= 本轮实际迈出的一步）
+            global_update_norm=float(
+                np.linalg.norm(layer["layer_global_update_norm"])
+                if layer else np.nan),
+            layer_names=layer.get("layer_names"),
+            layer_update_norm=layer.get("layer_update_norm"),
+            layer_global_update_norm=layer.get("layer_global_update_norm"),
+            layer_cos_centroid=layer.get("layer_cos_centroid"),
+            extra={**outcome.extra, **groups,
                    "selected": (outcome.selected.tolist()
                                 if outcome.selected is not None else None),
                    "median_influence": signals["median_influence"].tolist()}))
@@ -217,6 +259,51 @@ class TrainingTracker:
                       else value.detach().clone())
                 for key, value in global_state.items()}
 
+    def _clean_pass(self, model: Any) -> Dict[str, float]:
+        """一次前向，同时给出 clean loss / MTA / 目标类准确率。
+
+        **MTA 与既有的 ``acc`` 不是同一个数。** ``acc = 1 − error_rate``
+        算的是**非目标类**样本上的准确率（``exp_e._metrics`` 的口径，为了让
+        ASR 的分母与它一致）；MTA 按惯例是**全部样本**上的准确率。两者相差
+        约一个类的权重。这里两个都记、各自命名 —— 把 ``acc`` 悄悄改成 MTA
+        会让此前所有实验的数字不可比。
+        """
+        loader = self.probe.loader(int(self.cfg.probe.batch_size))
+        target = int(self.target_class)
+        was_training = model.training
+        model.eval()
+        total_loss, n_seen, n_correct = 0.0, 0, 0
+        n_target, n_target_correct = 0, 0
+        try:
+            with torch.no_grad():
+                for batch in loader:
+                    images = batch[0].to(self.device)
+                    labels = batch[1].to(self.device)
+                    logits = model(images)
+                    # sum 而不是 mean：最后一个 batch 通常更小，
+                    # 按 batch 平均再平均会给它过高的权重
+                    total_loss += float(torch.nn.functional.cross_entropy(
+                        logits, labels, reduction="sum").item())
+                    predicted = logits.argmax(dim=1)
+                    n_correct += int((predicted == labels).sum())
+                    n_seen += int(labels.numel())
+                    is_target = labels == target
+                    n_target += int(is_target.sum())
+                    n_target_correct += int(
+                        (predicted[is_target] == target).sum())
+        finally:
+            if was_training:
+                model.train()
+        return {
+            "clean_loss": total_loss / n_seen if n_seen else float("nan"),
+            "mta": n_correct / n_seen if n_seen else float("nan"),
+            # 目标类准确率：ASR 上升时它通常也上升（后门把别的类推向目标类
+            # 不影响这个数），所以它是"模型是否只是变得偏爱目标类"的对照
+            "acc_target_class": (n_target_correct / n_target if n_target
+                                 else float("nan")),
+            "n_clean_eval_samples": n_seen,
+        }
+
     def _evaluate_model(self, model: Any) -> Dict[str, float]:
         from .exp_e import _metrics, _predict, evaluate_mode
 
@@ -226,6 +313,7 @@ class TrainingTracker:
         row = {"acc": 1.0 - float(clean["error_rate"]),
                "asr_targeted": float("nan"),
                "asr_unfiltered": float("nan")}
+        row.update(self._clean_pass(model))
         generator = (self.generator_getter() if self.generator_getter is not None
                      else None)
         if generator is None:
@@ -266,14 +354,14 @@ class TrainingTracker:
         donor = eval_clients[0]
 
         # --- 全局模型（借 BN，以及原样的对照） ---
-        model = get_resnet(size=10, num_classes=self.num_classes)
+        model = get_resnet(size=self.model_size, num_classes=self.num_classes)
         model.load_state_dict(self._borrowed_bn_state(server, donor), strict=True)
         model.to(self.device)
         model.device = self.device
         global_row = self._evaluate_model(model)
         del model
 
-        raw = get_resnet(size=10, num_classes=self.num_classes)
+        raw = get_resnet(size=self.model_size, num_classes=self.num_classes)
         raw.load_state_dict(server.global_model.state_dict(), strict=True)
         raw.to(self.device)
         raw.device = self.device
@@ -299,9 +387,35 @@ class TrainingTracker:
         malicious_now = sum(
             1 for i in self.selected_indices
             if bool(getattr(clients[i], "diag_is_malicious", False)))
+
+        # --- 逐 edge 的行 ---
+        # 本仓库是扁平 FL，没有中间聚合层，所以 "edge" 就是客户端。真有层级
+        # 结构时这里要多一列 edge_id，均值也要改成先组内再组间。
+        for client, row in list(zip(eval_clients, rows)) + \
+                list(zip(malicious_clients, malicious_rows)):
+            self.edge_rows.append({
+                "round": self.cur_round, "defense": self.defense_name,
+                "seed": self.seed, "bad_client_num": int(self.bad_client_num),
+                "client_id": int(client.cid),
+                "is_malicious": bool(getattr(client, "diag_is_malicious", False)),
+                "participated_this_round": int(client.cid) in selected_ids,
+                "acc": row["acc"], "mta": row["mta"],
+                "clean_loss": row["clean_loss"],
+                "acc_target_class": row["acc_target_class"],
+                "asr_targeted": row["asr_targeted"],
+                "asr_unfiltered": row["asr_unfiltered"],
+            })
+
+        # MTA 供 after_mta 调度读取。**只有评估过的轮次才更新** ——
+        # 调度因此最多滞后 eval_every 轮，这一点记在 schedule.py 里。
+        self.last_mta = _mean("mta")
+
         self.implantation_rows.append({
             "round": self.cur_round, "defense": self.defense_name,
             "bad_client_num": int(self.bad_client_num),
+            "poison_rate": self.poison_rate,
+            "schedule": self.schedule_kind,
+            "attack_active_this_round": bool(self.attack_active),
             "tau": self.tau, "alpha": self.trim_alpha,
             "alpha_dirichlet": self.alpha_dirichlet, "seed": self.seed,
             "variant": self.variant or self.defense_name,
@@ -311,6 +425,14 @@ class TrainingTracker:
             "asr_global_targeted": global_row["asr_targeted"],
             "asr_personalized_targeted": _mean("asr_targeted"),
             "asr_unfiltered": _mean("asr_unfiltered"),
+            # 主任务指标。mta 是**全部样本**上的准确率，acc_personalized 是
+            # 非目标类样本上的（与 ASR 的分母同口径）—— 两者不是同一个数。
+            "mta_personalized": _mean("mta"),
+            "mta_global": global_row["mta"],
+            "clean_loss_personalized": _mean("clean_loss"),
+            "clean_loss_global": global_row["clean_loss"],
+            "acc_target_class_personalized": _mean("acc_target_class"),
+            "acc_target_class_global": global_row["acc_target_class"],
             "mask_keep_ratio": float("nan"), "effective_trim_n": -1,
             "zero_sign_ratio": float("nan"),
             "n_malicious_this_round": malicious_now,
@@ -342,3 +464,17 @@ class TrainingTracker:
                                  for r in frame["round"]]
         rest = [c for c in frame.columns if c not in IMPLANTATION_COLUMNS]
         return frame[[c for c in IMPLANTATION_COLUMNS if c in frame.columns] + rest]
+
+    def edge_frame(self):
+        """逐 edge（客户端）的评估行 —— "attack success on each Edge"。
+
+        均值会掩盖分布：90 个客户端里 10 个 ASR=1.0、80 个 ASR=0.0 与全部
+        ASR=0.11 的均值一模一样，而两者的含义完全相反。
+        """
+        import pandas as pd
+
+        if not self.edge_rows:
+            return pd.DataFrame(columns=EDGE_COLUMNS)
+        frame = pd.DataFrame(self.edge_rows)
+        rest = [c for c in frame.columns if c not in EDGE_COLUMNS]
+        return frame[[c for c in EDGE_COLUMNS if c in frame.columns] + rest]

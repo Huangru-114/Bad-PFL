@@ -109,6 +109,12 @@ class RoundRecord:
     n_malicious_in_round: int = 0
     n_selected: int = 0
     defense: str = ""
+    # 参数指标（--layer-metrics 打开时才有；关闭时为 None / nan，不是 0）
+    global_update_norm: float = float("nan")
+    layer_names: Optional[np.ndarray] = None
+    layer_update_norm: Optional[np.ndarray] = None       # [N, L]
+    layer_global_update_norm: Optional[np.ndarray] = None  # [L]
+    layer_cos_centroid: Optional[np.ndarray] = None      # [L]
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_npz(self) -> Dict[str, Any]:
@@ -265,6 +271,140 @@ def round_signals(w_prev: Dict[str, torch.Tensor],
     if trim_k is not None:
         result["trim_survival_rate"] = (trim_hits / max(total_coords, 1)).numpy()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Gram 原语（``defenses`` 从这里 import，全仓库只有这一份定义）
+# ---------------------------------------------------------------------------
+def pseudo_grad_stack(w_prev: Dict[str, torch.Tensor],
+                      state_dicts: Sequence[Dict[str, torch.Tensor]],
+                      key: str) -> torch.Tensor:
+    """某个 key 上的 ``[N, ...]`` 伪梯度堆叠，``g = w_prev − w``。"""
+    reference = w_prev[key].detach().to(torch.float32)
+    return torch.stack(
+        [reference - state[key].detach().to(reference.device, torch.float32)
+         for state in state_dicts], dim=0)
+
+
+def gram_matrix(w_prev: Dict[str, torch.Tensor],
+                state_dicts: Sequence[Dict[str, torch.Tensor]],
+                keys: Sequence[str]) -> torch.Tensor:
+    """``G[i,j] = <g_i, g_j>``，按 key 流式累加，不构造 ``[N, D]``。
+
+    两两距离与余弦都能从它导出。用 float64 累加：ResNet-18 上 D 超过 1000 万，
+    float32 的累加误差会污染余弦的第 3 位小数。
+    """
+    n_clients = len(state_dicts)
+    # 累加器留在 CPU：每个 key 只搬回一个 N×N 的小矩阵。
+    gram = torch.zeros(n_clients, n_clients, dtype=torch.float64)
+    for key in keys:
+        flat = pseudo_grad_stack(w_prev, state_dicts, key).reshape(
+            n_clients, -1).to(torch.float64)
+        gram += (flat @ flat.T).cpu()
+    return gram
+
+
+def pairwise_distance(gram: torch.Tensor) -> torch.Tensor:
+    diagonal = gram.diagonal()
+    squared = diagonal[:, None] + diagonal[None, :] - 2.0 * gram
+    return squared.clamp(min=0.0).sqrt()
+
+
+def pairwise_cosine(gram: torch.Tensor) -> torch.Tensor:
+    norms = gram.diagonal().clamp(min=1e-24).sqrt()
+    return gram / (norms[:, None] * norms[None, :])
+
+
+# ---------------------------------------------------------------------------
+# 分层与分组的参数指标（正式实验的"参数指标"一节）
+# ---------------------------------------------------------------------------
+def layer_signals(w_prev: Dict[str, torch.Tensor],
+                  state_dicts: Sequence[Dict[str, torch.Tensor]],
+                  is_malicious: Sequence[bool]) -> Dict[str, Any]:
+    """逐层的更新范数与"恶意质心 vs 良性质心"的余弦。
+
+    层的粒度是**参数 key**，不是模块 —— 原始粒度存下来，要合并成模块级由
+    分析侧决定。反过来做（存的时候就合并）会把信息丢掉且不可逆。
+
+    ``layer_cos_centroid`` 是 ``cos(mean_{k∈mal} g_k, mean_{k∈benign} g_k)``,
+    **不是**两两余弦的平均 —— 两者回答不同的问题：质心余弦问"两群的合力方向
+    是否一致"（决定聚合后剩下什么），两两平均问"个体之间像不像"（决定能否
+    检出）。两个都记，各自命名。
+
+    没有恶意客户端（或没有良性客户端）的轮次，余弦是 **nan** 而不是 0 ——
+    0 表示"正交"，是一个具体的结论，不能用来表示"算不出来"。
+    """
+    shared_float, _, _ = split_keys(state_dicts[0])
+    malicious = np.asarray(is_malicious, dtype=bool)
+    n_clients = len(state_dicts)
+    if malicious.shape[0] != n_clients:
+        raise ValueError(f"is_malicious 长度 {malicious.shape[0]} 与客户端数 "
+                         f"{n_clients} 不一致")
+    has_both = bool(malicious.any() and (~malicious).any())
+
+    names: List[str] = []
+    norms: List[np.ndarray] = []
+    global_norms: List[float] = []
+    centroid_cos: List[float] = []
+
+    for key in shared_float:
+        stacked = pseudo_grad_stack(w_prev, state_dicts, key)
+        flat = stacked.reshape(n_clients, -1)
+        names.append(str(key))
+        norms.append(flat.norm(dim=1).cpu().numpy())
+        # 全局更新 = 各客户端更新的均值（FedAvg 的聚合步）
+        global_norms.append(float(flat.mean(dim=0).norm().item()))
+        if has_both:
+            mal_mean = flat[malicious].mean(dim=0).to(torch.float64)
+            ben_mean = flat[~malicious].mean(dim=0).to(torch.float64)
+            denominator = (mal_mean.norm() * ben_mean.norm()).clamp(min=1e-24)
+            centroid_cos.append(float((mal_mean @ ben_mean / denominator).item()))
+        else:
+            centroid_cos.append(float("nan"))
+
+    return {
+        # 定长 unicode 而不是 object：np.savez 在 allow_pickle=False 下
+        # 读不回 object 数组，而 load_round_records 正是用它读的
+        "layer_names": np.array(names),
+        "layer_update_norm": np.stack(norms, axis=1) if norms
+        else np.zeros((n_clients, 0)),
+        "layer_global_update_norm": np.asarray(global_norms, dtype=float),
+        "layer_cos_centroid": np.asarray(centroid_cos, dtype=float),
+    }
+
+
+def group_cosines(gram: torch.Tensor, is_malicious: Sequence[bool]
+                  ) -> Dict[str, float]:
+    """整模型口径的组间/组内余弦，以及全局更新范数。
+
+    对角线（自己和自己）恒为 1，必须从组内均值里剔除，否则恶意客户端只有
+    1 个时 ``cos_mal_mal`` 会是 1.0 —— 那是对角线，不是任何发现。
+    """
+    malicious = np.asarray(is_malicious, dtype=bool)
+    cosine = pairwise_cosine(gram).numpy()
+    n_clients = cosine.shape[0]
+    if malicious.shape[0] != n_clients:
+        raise ValueError(f"is_malicious 长度 {malicious.shape[0]} 与 gram 阶数 "
+                         f"{n_clients} 不一致")
+
+    def _block_mean(rows: np.ndarray, cols: np.ndarray,
+                    drop_diagonal: bool) -> float:
+        if not rows.any() or not cols.any():
+            return float("nan")
+        block = cosine[np.ix_(rows, cols)]
+        if drop_diagonal:
+            if block.shape[0] < 2:
+                return float("nan")     # 只有 1 个成员时组内余弦无定义
+            mask = ~np.eye(block.shape[0], dtype=bool)
+            return float(block[mask].mean())
+        return float(block.mean())
+
+    benign = ~malicious
+    return {
+        "cos_mal_benign_pairwise": _block_mean(malicious, benign, False),
+        "cos_mal_mal_pairwise": _block_mean(malicious, malicious, True),
+        "cos_benign_benign_pairwise": _block_mean(benign, benign, True),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,36 @@ fl:
   total_round: 1000
   poison_rate: 0.2
   pfl: fedbn                 # 本仓库唯一实现的 PFL 方法
+  model_size: 10             # ResNet 规模；正式实验 1 用 18
+
+# ---------------------------------------------------------------------------
+# 实验 1（攻击剂量与 Bad-PFL 有效边界）与 1B（持续时间与累积效应）。
+# 注意：client_num 从 100 降到 20-40 会改变每轮的抽样算术，
+# **此前所有 I/J 结果都不再可比** —— 这是刻意的换设定，不是延续。
+# ---------------------------------------------------------------------------
+exp1:
+  client_num: 40
+  select_per_round: 8
+  model_size: 18
+  total_round: 200
+  local_steps: 15
+  eval_every: 5              # ASR-vs-MTA 需要密集的 (MTA, ASR) 配对
+  alpha: 0.5
+  seeds: [0, 1]
+  # 粗粒度扫描：先各扫一条轴，不做全因子（4×4×2 seed = 32 个 run 太贵）
+  bad_nums: [1, 2, 4, 8]
+  poison_rates: [0.1, 0.25, 0.5, 1.0]
+  # 单轴扫描时另一个变量固定在这里
+  bad_num_fixed: 4
+  poison_rate_fixed: 0.5
+  # 1B 的调度。剂量固定在上面两个 *_fixed 上，只变时间结构。
+  schedules:
+    - {kind: continuous}
+    - {kind: burst, start: 40, length: 20}
+    - {kind: intermittent, period: 10, duty: 2}
+    - {kind: after_mta, mta_threshold: 0.6}
+    - {kind: early, end: 60}
+    - {kind: late, start: 140}
 
 # ---------------------------------------------------------------------------
 # 正式扫描矩阵。run_matrix.py 读取；本次任务不执行。
