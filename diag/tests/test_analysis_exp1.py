@@ -15,7 +15,7 @@ import pandas as pd
 from diag.analysis_exp1 import (crossing_table, dose_response, load_runs,
                                 onset_analysis, persistence_table, plot_e1_1,
                                 plot_e1_2, plot_e1_4, plot_e1b_1, plot_e1b_2,
-                                threshold_verdict)
+                                resolve_asr_column, threshold_verdict)
 
 
 def _run(run_id, *, bad=4, rho=0.5, seed=0, schedule="continuous",
@@ -59,6 +59,41 @@ def test_load_derives_run_id_from_the_filename():
             Path(tmp) / "exp_ij_implantation_e1_bad4_rho0p5_s0.csv", index=False)
         frame = load_runs(str(Path(tmp) / "*.csv"))
         assert set(frame["run_id"]) == {"e1_bad4_rho0p5_s0"}
+
+
+# ---------------------------------------------------------------------------
+# ASR 口径选择：论文列优先，旧列兜底，都没有则报错
+# ---------------------------------------------------------------------------
+def test_resolve_asr_prefers_paper_column():
+    frame = _run("x")
+    frame["asr_paper_all"] = np.linspace(0.1, 0.95, len(frame))
+    name, note = resolve_asr_column(frame, "asr_paper_all")
+    assert name == "asr_paper_all"
+    assert "论文尺" in note
+
+
+def test_resolve_asr_falls_back_when_paper_column_absent():
+    frame = _run("x")            # 只有旧 perturb 列，无 asr_paper_*
+    name, note = resolve_asr_column(frame, "asr_paper_all")
+    assert name == "asr_personalized_targeted"
+    assert "回退" in note
+
+
+def test_resolve_asr_falls_back_when_paper_column_all_nan():
+    frame = _run("x")
+    frame["asr_paper_all"] = np.nan   # 列在但整列 nan（例如 clean run）
+    name, _ = resolve_asr_column(frame, "asr_paper_all")
+    assert name == "asr_personalized_targeted"
+
+
+def test_resolve_asr_raises_when_no_known_column():
+    frame = _run("x").drop(columns=["asr_personalized_targeted"])
+    raised = None
+    try:
+        resolve_asr_column(frame, "asr_paper_all")
+    except KeyError as error:
+        raised = str(error)
+    assert raised is not None
 
 
 # ---------------------------------------------------------------------------

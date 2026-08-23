@@ -93,16 +93,43 @@
   MTA"显得集中。`threshold_verdict` 因此带零假设。这只是相关性证据，
   分因果要靠 1B 的 `onset_analysis`。
 
+## 5b. ⚠️ 已定案：exp1 的低 ASR 是**测量口径**问题，不是攻击/轮数问题
+
+2026-08 集群实测，逐层坐实：
+
+| 证据 | 数值 | 结论 |
+|---|---|---|
+| diag 恶意正对照 `asr_targeted` | 0.98→0.999（尾段） | 攻击**完全植入**，排除欠训/轮数 |
+| diag 良性个性化 `asr_personalized_targeted` | 0.19–0.33，且不升反降 | 加轮数救不了；不是训练长度问题 |
+| **原始 `main.py`**（100/10/ResNet-10/300/fedbn） | **Avg ASR 91.95%**，逐客户端 57–100% | **原仓库复现论文**，无环境级 gap |
+
+→ 后门**确实**存活在良性个性化模型上（~90%）。diag 早先读到的 ~0.25 是
+**perturb 分解路径**（重建 δ/ξ + 共享 probe）在弱后门模型上低估所致，**不是
+真实现象**。我一度把它解读成"后门穿不过个性化的发现"——**那是错的，已作废**。
+
+**论文口径（`main.py:127–138`）**：遍历**全体**客户端，各自 `local_model`，
+在**各自 test loader** 上用**原始 `full_poison_func`**（poison_ratio=1.0）、
+`model.eval()`、**不过滤目标类**，求平均。
+
+**已修**（埋点 12 / PATCHES）：`track.py` 新增 `_paper_asr` + `paper_eval_func`，
+落 `asr_paper_benign/malicious/all` 与逐客户端 `asr_paper`；`analysis_exp1`
+默认用 `asr_paper_all`（缺列回退旧列并告警）。**perturb 路径只留给实验 E**。
+exp1 需**重跑**才有论文口径列（旧 CSV 无 `asr_paper_*`）。
+
 ## 6. 待办 / 未决
 
 - [ ] **最优先**：真实数据上跑 `analysis_exposure`（步骤 0），看 E 是否坍缩成一条曲线。
 - [ ] **实验 F**（步骤 1）：定路 3 生死。快照已备。
-- [ ] 正式实验 1/1B 在集群上跑（26 个 run，代码就绪）。
+- [ ] **exp1 需重跑**：换论文口径 ASR（埋点 12）后，旧 CSV 没有 `asr_paper_*` 列，
+      `analysis_exp1` 会回退旧口径并告警。重跑 26 个 run 才能得到论文尺的 ASR。
 - [ ] 实验 I §6 归因图（后门维度 sign consistency `c_k` 分布 vs 随机维度）——
       从现有 checkpoint 可算，一直没做。用户称其为"论文核心图"。
 - [ ] "Invariant 弱于 FLAME"在 bad=5 上两者都约 30% 无分离，要下这个结论需 ≥3 seed。
-- [ ] 长期开口：E1 vs 论文 82.22% 的复现 gap；`sign_consistency` 的逐客户端定义
-      是我对 Wang et al. 的推广，需对照原文确认。
+- [x] ~~E1 vs 论文 82.22% 的复现 gap~~ **已定案**：原始 `main.py` 复现出
+      Avg ASR 91.95%（见 §5b），gap 是 diag 的 perturb 测量口径造成的，不是复现
+      失败。exp1 改用论文口径后应对齐。
+- [ ] 长期开口：`sign_consistency` 的逐客户端定义是我对 Wang et al. 的推广，
+      需对照原文确认。
 
 ## 7. 提交历史锚点（最近）
 

@@ -46,7 +46,7 @@ import pandas as pd
 from .analysis import assert_no_cjk_in_figure
 
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
-           "restrict_to_common_dose",
+           "restrict_to_common_dose", "resolve_asr_column",
            "onset_analysis", "dose_response", "persistence_table",
            "plot_e1_1", "plot_e1_2", "plot_e1_3", "plot_e1_4",
            "plot_e1b_1", "plot_e1b_2", "main"]
@@ -56,6 +56,27 @@ MTA_COLUMN = "mta_personalized"
 LOSS_COLUMN = "clean_loss_personalized"
 _REQUIRED = ("round", "seed", "bad_client_num", "poison_rate", "schedule",
              ASR_COLUMN, MTA_COLUMN)
+
+
+def resolve_asr_column(frame: pd.DataFrame, chosen: str) -> Tuple[str, str]:
+    """选定当 ASR 用的列，返回 ``(列名, 提示语)``。
+
+    优先用 ``chosen``（默认论文口径 ``asr_paper_all``）；该列不存在或整列 nan
+    时回退到旧的 perturb 分解口径 ``asr_personalized_targeted``（仅良性、会低估,
+    见 HANDOFF），并给出告警语。两者都没有则抛 ``KeyError`` —— 绝不静默乱选。
+    """
+    if chosen in frame.columns and bool(np.isfinite(frame[chosen]).any()):
+        note = ("（论文尺：原始触发器 + 各客户端自己 test loader）"
+                if chosen.startswith("asr_paper") else "")
+        return chosen, note
+    if "asr_personalized_targeted" in frame.columns:
+        return "asr_personalized_targeted", (
+            f"⚠️ 数据里没有可用的 '{chosen}' 列，回退到旧口径 "
+            f"asr_personalized_targeted（perturb 分解，仅良性，会低估）。"
+            f"这多半是 2026-08 之前的 run —— 重跑才有论文口径。")
+    raise KeyError(
+        f"数据里既没有 '{chosen}' 也没有 asr_personalized_targeted，无法确定 "
+        f"ASR 列。可用列：{sorted(frame.columns)}")
 
 
 def load_runs(pattern: str) -> pd.DataFrame:
@@ -333,7 +354,7 @@ def plot_e1_1(frame: pd.DataFrame, out_path) -> Path:
         axis.plot(group["round"], group[ASR_COLUMN], color=colors[key],
                   linewidth=1.4, alpha=0.9, label=label)
     axis.set_xlabel("Communication round")
-    axis.set_ylabel("Backdoor ASR (personalized)")
+    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
     axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
@@ -377,7 +398,7 @@ def plot_e1_2(frame: pd.DataFrame, out_path,
                                 ec="crimson", alpha=0.85))
 
     axis.set_xlabel("Main task accuracy (MTA, personalized)")
-    axis.set_ylabel("Backdoor ASR (personalized)")
+    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
     axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
@@ -407,7 +428,7 @@ def plot_e1_3(frame: pd.DataFrame, out_path) -> Path:
                   marker="o", markersize=3, linewidth=0.9, alpha=0.85)
     axis.invert_xaxis()          # 训练推进方向朝右，与 E1-2 的读法一致
     axis.set_xlabel("Clean cross-entropy loss (decreasing ->)")
-    axis.set_ylabel("Backdoor ASR (personalized)")
+    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
     axis.set_title("E1-3  ASR against a second maturity measure")
@@ -530,7 +551,7 @@ def plot_e1b_2(persistence: pd.DataFrame, out_path) -> Path:
         axis.plot(xs, [float(grouped.get_group(x).mean()) for x in xs],
                   marker="o", markersize=4, linewidth=1.5, label=str(kind))
     axis.set_xlabel("Rounds since the attack stopped")
-    axis.set_ylabel("Backdoor ASR (personalized)")
+    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
     axis.legend(fontsize=8)
@@ -557,11 +578,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--level", type=float, default=0.5,
                         help="判定'后门已植入'的 ASR 水平")
     parser.add_argument("--tail", type=int, default=3)
+    parser.add_argument("--asr-column", default="asr_paper_all",
+                        help="用哪一列当 ASR。默认 asr_paper_all —— 论文口径"
+                             "（原始触发器 + 各客户端自己 test loader，全体均值，"
+                             "对齐 main.py 的 Avg ASR）。可选 asr_paper_benign / "
+                             "asr_paper_malicious，或旧口径 asr_personalized_targeted"
+                             "（perturb 分解，仅良性）。缺列时自动回退到旧口径。")
     args = parser.parse_args(argv)
 
     frame = load_runs(args.implantation_glob)
     out_dir, prefix = Path(args.out_dir), Path(args.summary_prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    # 选定 ASR 列（论文口径优先，缺列回退旧口径）。所有下游函数读模块级
+    # ASR_COLUMN，这里在调用它们之前改掉即可。
+    global ASR_COLUMN
+    ASR_COLUMN, asr_note = resolve_asr_column(frame, str(args.asr_column))
+    if asr_note:
+        print(f"  {asr_note}")
+    print(f"[analysis_exp1] ASR 口径 = {ASR_COLUMN}")
 
     stage1 = frame[frame["schedule"] == "continuous"]
     stage1b = frame

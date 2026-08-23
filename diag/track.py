@@ -86,6 +86,11 @@ IMPLANTATION_COLUMNS = [
     "tau", "alpha", "alpha_dirichlet", "seed", "variant",
     "acc_global", "acc_global_raw", "acc_personalized",
     "asr_global_targeted", "asr_personalized_targeted", "asr_unfiltered",
+    # 论文口径 ASR（原始 full_poison_func，各客户端自己 test loader，不过滤）。
+    # 这是 exp1 的**主** ASR；上面 asr_personalized_targeted 是 perturb 分解口径,
+    # 只对良性求平均且经 δ/ξ 重建，两者不可混。asr_paper_all 才对齐 main.py 的
+    # "Avg ASR"（全体客户端均值）。
+    "asr_paper_benign", "asr_paper_malicious", "asr_paper_all",
     # 主任务：mta 是全部样本上的准确率，acc_* 是非目标类样本上的（≠ mta）
     "mta_personalized", "mta_global",
     "clean_loss_personalized", "clean_loss_global",
@@ -102,6 +107,8 @@ EDGE_COLUMNS = [
     "round", "defense", "seed", "bad_client_num", "client_id", "is_malicious",
     "participated_this_round", "acc", "mta", "clean_loss",
     "acc_target_class", "asr_targeted", "asr_unfiltered",
+    # 论文口径 ASR（原始触发器 + 本客户端自己 test loader，不过滤目标类）
+    "asr_paper",
 ]
 
 
@@ -139,6 +146,13 @@ class TrainingTracker:
     eval_client_ids: Sequence[int] = field(default_factory=tuple)
     eval_malicious_ids: Sequence[int] = field(default_factory=tuple)
     generator_getter: Optional[Any] = None
+    # 论文口径 ASR 的评估函数：``fba.use_our_attack`` 返回的 ``eval_func``
+    # （即 poison_ratio=1.0 的 ``full_poison_func``，main.py:117/131）。设了它,
+    # exp1 的植入 ASR 就用**原始触发器**在每个客户端自己的 test loader 上算,
+    # 与论文完全同尺（见 _paper_asr）。clean run / 未提供时记为 nan。
+    # 注意：perturb 的 δ/ξ 分解路径（_evaluate_model）仍在，但**只服务实验 E**
+    # （它需要 δ-only/ξ-only 拆分）；exp1 的 ASR 结论一律看 asr_paper_*。
+    paper_eval_func: Optional[Any] = None
     probe: Any = None
     target_class: int = 0
     num_classes: int = 10
@@ -304,6 +318,45 @@ class TrainingTracker:
             "n_clean_eval_samples": n_seen,
         }
 
+    def _paper_asr(self, model: Any, test_loader: Any) -> float:
+        """论文口径 ASR = ``utils.evaluate_accuracy(model, loader, full_poison_func)``。
+
+        逐行复刻 ``main.py:131``：给该客户端**自己的** test loader 里的每张图打
+        完整触发器（``self.paper_eval_func`` = poison_ratio=1.0 的原始
+        ``full_poison_func``，δ 用训练中的真生成器、ξ 用原始 ``pgd_attack``），
+        标签全改 ``target_class``，统计 ``argmax == target_class`` 的比例。
+
+        - **不过滤目标类样本**（分母是全部样本），与论文一致；
+        - ``model`` 强制 ``eval()``（``utils.evaluate_accuracy`` 也是 eval），
+          返回前恢复；
+        - ``full_poison_func`` 内部的 PGD 需要梯度,故**不**套 ``no_grad``;
+          仅前向预测套 ``no_grad``。整个调用在 ``preserve_rng_state`` 下发生
+          （见 _maybe_evaluate），PGD 的随机起点不会泄漏进训练随机流。
+        - 返回 ``[0, 1]`` 的比例（不是百分比）；缺 loader / 无攻击时返回 nan。
+        """
+        if self.paper_eval_func is None or test_loader is None:
+            return float("nan")
+        target = int(self.target_class)
+        was_training = model.training
+        model.eval()
+        n_correct, n_total = 0, 0
+        try:
+            for batch in test_loader:
+                images = batch[0].to(self.device)
+                labels = batch[1].to(self.device)
+                # 原始触发器：pgd(client.local_model) + trigger_gen(data)。
+                # 返回 (poison_data, all-target-label)，标签这里用不到——直接
+                # 比 target，与 evaluate_accuracy 的 pred==transformed_label 等价。
+                perturbed, _ = self.paper_eval_func(images, labels)
+                with torch.no_grad():
+                    preds = model(perturbed).argmax(dim=1)
+                n_correct += int((preds == target).sum())
+                n_total += int(labels.numel())
+        finally:
+            if was_training:
+                model.train()
+        return n_correct / n_total if n_total else float("nan")
+
     def _evaluate_model(self, model: Any) -> Dict[str, float]:
         from .exp_e import _metrics, _predict, evaluate_mode
 
@@ -388,6 +441,33 @@ class TrainingTracker:
             1 for i in self.selected_indices
             if bool(getattr(clients[i], "diag_is_malicious", False)))
 
+        # --- 论文口径 ASR（原始触发器 + 各客户端自己的 test loader） ---
+        # 对已取到的良性评估子集 + 恶意客户端逐个算。asr_paper_all 是两组合并的
+        # 均值，近似 main.py 遍历全体客户端的 "Avg ASR"（这里是评估子集上的近似,
+        # 不是全 40 个客户端；要全量就把 eval_client_ids 放到全部良性）。
+        paper_by_cid: Dict[int, float] = {}
+        for client in eval_clients + malicious_clients:
+            paper_by_cid[int(client.cid)] = self._paper_asr(
+                client.local_model, getattr(client, "test_dataloader", None))
+        # full_poison_func 内部 PGD 会把梯度累加进被绑定的恶意客户端模型；
+        # client.py 在下次本地训练取数前会 zero_grad，本无副作用，但按诊断惯例
+        # 主动清掉,避免与 layer_metrics 等其它读操作相互干扰。
+        for client in clients:
+            model = getattr(client, "local_model", None)
+            if model is not None:
+                model.zero_grad(set_to_none=True)
+
+        def _paper_mean(cids: Sequence[int]) -> float:
+            values = [paper_by_cid[i] for i in cids
+                      if np.isfinite(paper_by_cid.get(i, float("nan")))]
+            return float(np.mean(values)) if values else float("nan")
+
+        benign_cids = [int(c.cid) for c in eval_clients]
+        malicious_cids = [int(c.cid) for c in malicious_clients]
+        asr_paper_benign = _paper_mean(benign_cids)
+        asr_paper_malicious = _paper_mean(malicious_cids)
+        asr_paper_all = _paper_mean(benign_cids + malicious_cids)
+
         # --- 逐 edge 的行 ---
         # 本仓库是扁平 FL，没有中间聚合层，所以 "edge" 就是客户端。真有层级
         # 结构时这里要多一列 edge_id，均值也要改成先组内再组间。
@@ -404,6 +484,7 @@ class TrainingTracker:
                 "acc_target_class": row["acc_target_class"],
                 "asr_targeted": row["asr_targeted"],
                 "asr_unfiltered": row["asr_unfiltered"],
+                "asr_paper": paper_by_cid.get(int(client.cid), float("nan")),
             })
 
         # MTA 供 after_mta 调度读取。**只有评估过的轮次才更新** ——
@@ -425,6 +506,10 @@ class TrainingTracker:
             "asr_global_targeted": global_row["asr_targeted"],
             "asr_personalized_targeted": _mean("asr_targeted"),
             "asr_unfiltered": _mean("asr_unfiltered"),
+            # 论文口径（exp1 的主 ASR）
+            "asr_paper_benign": asr_paper_benign,
+            "asr_paper_malicious": asr_paper_malicious,
+            "asr_paper_all": asr_paper_all,
             # 主任务指标。mta 是**全部样本**上的准确率，acc_personalized 是
             # 非目标类样本上的（与 ASR 的分母同口径）—— 两者不是同一个数。
             "mta_personalized": _mean("mta"),

@@ -351,6 +351,33 @@ least two devices, cuda:0 and cpu!`
 
 两处都改成从 `meta.json` / config 读 `model_size`。
 
+### 埋点 12. exp1 植入 ASR 改用论文口径（原始 `full_poison_func`）
+
+- **动机**：exp1 原先用 `track.py::_evaluate_model` 的 **perturb 分解路径**
+  （`make_delta_fn` + `make_xi_fn` 重建 δ/ξ，在共享 probe 上）算 ASR。实测它把
+  **良性个性化 ASR 严重低估**：同一批良性个性化模型，原始 `main.py` 打出
+  ~90%，而 perturb 路径只读到 ~25%（恶意端两者都 ~1.0）。这个落差会让 exp1 的
+  ASR 轴不可信。根因未逐一坐实，但方向明确：重建触发器在**弱后门**（良性）
+  模型上不如原始触发器有效。
+- **改法**：`TrainingTracker` 新增 `paper_eval_func`（= `use_our_attack` 返回的
+  `eval_func`，即 `poison_ratio=1.0` 的 `full_poison_func`）。`_paper_asr` 逐行
+  复刻 `main.py:131` = `utils.evaluate_accuracy(model, client.test_dataloader,
+  full_poison_func)`：**原始触发器**、**各客户端自己的 test loader**、
+  `model.eval()`、**不过滤目标类**、返回 `[0,1]` 比例。
+- **落盘列**：植入 CSV 加 `asr_paper_benign` / `asr_paper_malicious` /
+  `asr_paper_all`（`asr_paper_all` = 良性评估子集 + 恶意客户端的合并均值，近似
+  `main.py` 遍历全体的 "Avg ASR"，但只在 `eval_client_ids` 子集上）；edge CSV
+  加逐客户端 `asr_paper`。`analysis_exp1` 默认用 `asr_paper_all`，缺列自动回退
+  旧列并告警（`resolve_asr_column`）。
+- **perturb 路径保留但只服务实验 E**：E 需要 δ-only / ξ-only 的拆分，那是它的
+  正当用途；exp1 / 复现口径一律看 `asr_paper_*`，两套口径**不可混表**。
+- **副作用控制**：`full_poison_func` 内部 PGD 会把梯度累加进被绑定的恶意客户端
+  模型；整个评估在 `preserve_rng_state` 下发生（PGD 随机起点不泄漏进训练），
+  评估后对所有客户端模型 `zero_grad(set_to_none=True)`。
+- **成本**：只对 `eval_client_ids`（默认 ≤10 良性）+ 恶意客户端算，每 eval 轮
+  一次，PGD 仅 1 迭代，相对训练可忽略。要全 40 客户端的真·全体均值，把
+  `eval_client_ids` 放宽到全部良性即可。
+
 ### 埋点 11. Gram 原语的去重
 
 `gram_matrix` / `pairwise_cosine` / `pairwise_distance` / `pseudo_grad_stack`

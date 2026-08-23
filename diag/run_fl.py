@@ -437,6 +437,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             eval_malicious_ids=(malicious_ids if eval_include_malicious else ()),
             generator_getter=((lambda: generator) if generator is not None
                               else None),
+            # 论文口径 ASR 的评估函数：use_our_attack 返回的 eval_func
+            # （poison_ratio=1.0 的 full_poison_func）。clean run 为 None。
+            paper_eval_func=(eval_func if mode == "attack" else None),
             probe=probe, target_class=target_class, num_classes=num_classes)
         tracker.attach(server, clients)
 

@@ -406,6 +406,13 @@ python -m diag.analysis_exp1 \
 是 100 客户端 / ResNet-10 / 1000 轮。**此前所有 I/J 的数字都不再可比**，
 不要把两批结果画在同一张图上。
 
+⚠️ **exp1 的 ASR 用论文口径**（埋点 12）：`analysis_exp1` 默认读 `asr_paper_all`
+——原始 `full_poison_func`、各客户端自己的 test loader、不过滤目标类，对齐
+`main.py` 的 "Avg ASR"。旧 CSV（无 `asr_paper_*` 列）会**自动回退**到
+`asr_personalized_targeted`（perturb 分解口径，仅良性，**会严重低估**良性 ASR，
+见 HANDOFF §5b）并告警——那种情形要**重跑** exp1 才有论文口径。
+`--asr-column` 可选 `asr_paper_benign` / `asr_paper_malicious`。
+
 #### 扫描是十字形的，不是全因子
 
 固定 ρ_p 扫 N_m，再固定 N_m 扫 ρ_p，交叉点共用一个 run：4+4−1 = 7 个点 ×
