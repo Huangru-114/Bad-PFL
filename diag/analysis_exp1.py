@@ -547,7 +547,11 @@ def plot_e1b_2(persistence: pd.DataFrame, out_path) -> Path:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="实验 1 / 1B 的分析与图")
     parser.add_argument("--implantation-glob",
-                        default="results/raw/exp_ij_implantation_e1*.csv")
+                        # run_fl 写出的文件名是
+                        # exp_ij_implantation_<defense>_<mode>_a<alpha>_s<seed>_<run-tag>.csv，
+                        # run-tag（e1… / e1b…）在 _s<seed>_ 之后，不在开头，所以
+                        # 用 *_e1* 而非 e1* —— 后者匹配不到任何真实文件。
+                        default="results/raw/exp_ij_implantation_*_e1*.csv")
     parser.add_argument("--out-dir", default="results/figs")
     parser.add_argument("--summary-prefix", default="results/exp1")
     parser.add_argument("--level", type=float, default=0.5,

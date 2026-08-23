@@ -393,8 +393,12 @@ python -m diag.run_exp1                # 打印命令，不执行
 python -m diag.run_exp1 --stage 1b     # 只看 1B 的六种调度
 python -m diag.run_exp1 --execute      # 真跑（第一阶段 14 + 12 = 26 个 run）
 
+python -m diag.analysis_exp1        # 默认 glob 已匹配 run_fl 的真实文件名
+# 如需指定：run_fl 写出的名字是
+#   exp_ij_implantation_<defense>_<mode>_a<alpha>_s<seed>_<run-tag>.csv
+# run-tag（e1… / e1b…）在 _s<seed>_ 之后，所以用 *_e1* 而非 e1*
 python -m diag.analysis_exp1 \
-    --implantation-glob "results/raw/exp_ij_implantation_e1*.csv" \
+    --implantation-glob "results/raw/exp_ij_implantation_*_e1*.csv" \
     --out-dir results/figs --summary-prefix results/exp1
 ```
 
