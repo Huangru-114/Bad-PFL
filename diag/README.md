@@ -67,7 +67,7 @@
 | `run_density_sweep.py` | 恶意密度扫描的命令生成器（**默认 dry-run**） | `build_commands`, `expected_gap` | CLI |
 | `schedule.py` | 攻击调度（实验 1B）：六种时间结构 + 门控 | `AttackSchedule`, `gate_attack`, `SCHEDULES` | `run_fl` |
 | `run_exp1.py` | 实验 1/1B 的命令生成器（**默认 dry-run**，十字扫描） | `dose_points`, `build_commands`, `estimate_cost` | CLI |
-| `analysis_exp1.py` | 实验 1/1B 的六张图 + 阈值判据（含零假设） | `crossing_table`, `threshold_verdict`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
+| `analysis_exp1.py` | 实验 1/1B 的五张图 + 阈值判据（含零假设） | `crossing_table`, `threshold_verdict`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
 | `represent.py` | 表征指标（从 checkpoint **离线**算） | `embed`, `representation_row`, `representation_table` | CLI |
 
 ### 测试

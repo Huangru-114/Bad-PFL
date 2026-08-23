@@ -43,9 +43,12 @@ exp1:
   # 粗粒度扫描：先各扫一条轴，不做全因子（4×4×2 seed = 32 个 run 太贵）
   bad_nums: [1, 2, 4, 8]
   poison_rates: [0.1, 0.25, 0.5, 1.0]
-  # 单轴扫描时另一个变量固定在这里
+  # 单轴扫描时另一个变量固定在这里。
+  # ρ 固定在 0.1：小规模探测里 (Nm=4, ρ=0.1) 是植入最强的组合（论文口径 ASR
+  # >0.8），1B 要在能植入的剂量上才看得出时间结构的差异，也让 persistence 的
+  # 衰减有东西可衰减。⚠️ 这是 2-seed 探测的观察，多 seed 后可能要重定。
   bad_num_fixed: 4
-  poison_rate_fixed: 0.5
+  poison_rate_fixed: 0.1
   # 1B 的调度。剂量固定在上面两个 *_fixed 上，只变时间结构。
   schedules:
     - {kind: continuous}

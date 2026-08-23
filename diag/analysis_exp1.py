@@ -3,10 +3,9 @@
 ======  ==================================================  ================
 图      内容                                                  回答的问题
 ======  ==================================================  ================
-E1-1    ASR vs round，按剂量分组                              后门什么时候形成
-E1-2    ASR vs MTA 散点（跨 seed / 跨剂量）                    MTA* 存在吗
-E1-3    ASR vs clean loss                                    换个成熟度指标还成立吗
-E1-4    剂量-响应：最终 ASR vs N_m 与 vs ρ_p                   有效边界在哪
+E1-1    ASR vs round，每个剂量一条跨 seed 均值线                后门什么时候形成
+E1-2    ASR vs MTA 散点（色=剂量, marker=seed）                MTA* 存在吗
+E1-4    剂量-响应：各子图只动一个变量（真单轴扫描）             有效边界在哪
 E1B-1   各调度的 ASR_t，投毒轮次加底色                          时间结构的影响
 E1B-2   停攻后对齐的 ASR_{t+k}                                后门能自持吗
 ======  ==================================================  ================
@@ -48,7 +47,7 @@ from .analysis import assert_no_cjk_in_figure
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
            "onset_analysis", "dose_response", "persistence_table",
-           "plot_e1_1", "plot_e1_2", "plot_e1_3", "plot_e1_4",
+           "plot_e1_1", "plot_e1_2", "plot_e1_4",
            "plot_e1b_1", "plot_e1b_2", "main"]
 
 ASR_COLUMN = "asr_personalized_targeted"
@@ -333,56 +332,79 @@ def _finish(fig, out_path, note: str = "") -> Path:
 
 
 def _dose_colors(frame: pd.DataFrame) -> Dict[Tuple[int, float], Any]:
+    """每个剂量 (N_m, ρ_p) 一个**对比色**（tab10 定性色板），而不是同色系深浅。
+
+    单色系渐变让相邻剂量几乎分不开；定性色板每条曲线一眼可辨。剂量数
+    ≤10 用 tab10，更多则退到 tab20。
+    """
     keys = sorted({(int(b), float(p)) for b, p in
                    zip(frame["bad_client_num"], frame["poison_rate"])})
-    colormap = plt.get_cmap("viridis")
-    positions = np.linspace(0.05, 0.95, max(len(keys), 1))
-    return {key: colormap(pos) for key, pos in zip(keys, positions)}
+    palette = plt.get_cmap("tab10" if len(keys) <= 10 else "tab20")
+    return {key: palette(i % palette.N) for i, key in enumerate(keys)}
+
+
+def _dose_label(key: Tuple[int, float]) -> str:
+    return f"Nm={key[0]}, rho={key[1]:g}"
+
+
+def _seed_mean_curve(group: pd.DataFrame) -> pd.DataFrame:
+    """把一个剂量下多 seed 的 (round, ASR) 汇成 round -> 均值/最小/最大。
+
+    各 seed 的评估轮次一致（同一个 eval_every），按 round 对齐再求统计。
+    """
+    agg = group.groupby("round")[ASR_COLUMN].agg(["mean", "min", "max"])
+    return agg.sort_index()
 
 
 def plot_e1_1(frame: pd.DataFrame, out_path) -> Path:
-    """E1-1：ASR vs round，一条线一个 (剂量, seed)。"""
+    """E1-1：ASR vs round，**每个剂量一条跨 seed 的均值线**（不是每 seed 一条）。
+
+    seed 之间的包络用浅色填充带表示，剂量之间用对比色区分。
+    """
     fig, axis = plt.subplots(figsize=(7.6, 4.8))
     colors = _dose_colors(frame)
-    seen = set()
-    for run_id, group in frame.groupby("run_id"):
-        group = group.sort_values("round")
-        first = group.iloc[0]
-        key = (int(first["bad_client_num"]), float(first["poison_rate"]))
-        label = f"Nm={key[0]}, rho={key[1]:g}" if key not in seen else None
-        seen.add(key)
-        axis.plot(group["round"], group[ASR_COLUMN], color=colors[key],
-                  linewidth=1.4, alpha=0.9, label=label)
+    doses = sorted({(int(b), float(p)) for b, p in
+                    zip(frame["bad_client_num"], frame["poison_rate"])})
+    for key in doses:
+        block = frame[(frame["bad_client_num"] == key[0])
+                      & (frame["poison_rate"] == key[1])]
+        curve = _seed_mean_curve(block)
+        rounds = curve.index.to_numpy(dtype=float)
+        axis.fill_between(rounds, curve["min"], curve["max"],
+                          color=colors[key], alpha=0.15, linewidth=0)
+        axis.plot(rounds, curve["mean"], color=colors[key], linewidth=2.0,
+                  marker="o", markersize=3, label=_dose_label(key))
     axis.set_xlabel("Communication round")
     axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
-    axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                borderaxespad=0.0)
+    axis.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0, title="dose (mean over seeds)")
     axis.set_title("E1-1  Backdoor formation over training")
     return _finish(fig, out_path,
-                   "One line per (dose, seed). Nm = number of malicious "
-                   "clients; rho = per-sample poisoning probability.")
+                   "Solid line = mean over seeds for that dose; shaded band = "
+                   "min-max across seeds.  Nm = number of malicious clients; "
+                   "rho = per-sample poisoning probability.")
 
 
 def plot_e1_2(frame: pd.DataFrame, out_path,
               verdict: Optional[Dict[str, Any]] = None) -> Path:
-    """E1-2：ASR vs MTA —— 阈值问题的主图。"""
+    """E1-2：ASR vs MTA —— **散点**（不连线），对比色分剂量、marker 分 seed。"""
     fig, axis = plt.subplots(figsize=(7.6, 5.0))
     colors = _dose_colors(frame)
     markers = ["o", "s", "^", "D", "v", "P"]
     seeds = sorted(frame["seed"].unique())
     seen = set()
     for run_id, group in frame.groupby("run_id"):
-        group = group.sort_values("round")
         first = group.iloc[0]
         key = (int(first["bad_client_num"]), float(first["poison_rate"]))
         marker = markers[seeds.index(int(first["seed"])) % len(markers)]
-        label = f"Nm={key[0]}, rho={key[1]:g}" if key not in seen else None
+        label = _dose_label(key) if key not in seen else None
         seen.add(key)
-        axis.plot(group[MTA_COLUMN], group[ASR_COLUMN], color=colors[key],
-                  marker=marker, markersize=3.5, linewidth=0.9, alpha=0.85,
-                  label=label)
+        # 纯散点：run 内 MTA 随 t 单调，连线只会画出一条与 ASR~t 同形的假趋势
+        axis.scatter(group[MTA_COLUMN], group[ASR_COLUMN], color=colors[key],
+                     marker=marker, s=16, alpha=0.75, edgecolors="none",
+                     label=label)
 
     if verdict and np.isfinite(verdict.get("mta_at_cross_mean", np.nan)):
         mean = verdict["mta_at_cross_mean"]
@@ -405,71 +427,64 @@ def plot_e1_2(frame: pd.DataFrame, out_path,
                 borderaxespad=0.0)
     axis.set_title("E1-2  Does ASR take off at a common MTA?")
     return _finish(fig, out_path,
-                   "Marker shape = seed.  Within one run MTA is monotone in t, "
-                   "so this plot alone cannot separate t->MTA from MTA->ASR;\n"
+                   "Scatter (no connecting lines); colour = dose, marker = "
+                   "seed.  Within one run MTA is monotone in t, so this plot "
+                   "alone cannot separate t->MTA from MTA->ASR;\n"
                    "that separation comes from the 1B schedules (see E1B-1).")
 
 
-def plot_e1_3(frame: pd.DataFrame, out_path) -> Path:
-    """E1-3：ASR vs clean loss —— 换一个成熟度指标，结论还成立吗。"""
-    fig, axis = plt.subplots(figsize=(7.2, 4.6))
-    if LOSS_COLUMN not in frame.columns or not np.isfinite(
-            frame[LOSS_COLUMN]).any():
-        axis.text(0.5, 0.5, "clean loss was not recorded in these runs",
-                  ha="center", va="center", transform=axis.transAxes)
-        axis.set_axis_off()
-        return _finish(fig, out_path)
-    colors = _dose_colors(frame)
-    for run_id, group in frame.groupby("run_id"):
-        group = group.sort_values("round")
-        first = group.iloc[0]
-        key = (int(first["bad_client_num"]), float(first["poison_rate"]))
-        axis.plot(group[LOSS_COLUMN], group[ASR_COLUMN], color=colors[key],
-                  marker="o", markersize=3, linewidth=0.9, alpha=0.85)
-    axis.invert_xaxis()          # 训练推进方向朝右，与 E1-2 的读法一致
-    axis.set_xlabel("Clean cross-entropy loss (decreasing ->)")
-    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
-    axis.set_ylim(0.0, 1.0)
-    axis.grid(alpha=0.3)
-    axis.set_title("E1-3  ASR against a second maturity measure")
-    return _finish(fig, out_path,
-                   "X axis is inverted so that training progresses left to "
-                   "right, matching E1-2.")
+def _infer_cross_center(response: pd.DataFrame) -> Tuple[int, float]:
+    """从十字扫描数据里推断固定点 (Nm_fixed, ρ_fixed)。
+
+    十字扫描里：ρ 扫描那条线上的所有点共用同一个 Nm（= Nm_fixed），Nm 扫描
+    那条线上的所有点共用同一个 ρ（= ρ_fixed）。所以 Nm_fixed = 与最多个不同 ρ
+    共现的那个 Nm；ρ_fixed 同理。这样无需读 config 就能定位单轴。
+    """
+    nm_fixed = int(response.groupby("bad_client_num")["poison_rate"]
+                   .nunique().idxmax())
+    rho_fixed = float(response.groupby("poison_rate")["bad_client_num"]
+                      .nunique().idxmax())
+    return nm_fixed, rho_fixed
 
 
 def plot_e1_4(response: pd.DataFrame, out_path) -> Path:
-    """E1-4：剂量-响应。左 ASR vs N_m，右 ASR vs ρ_p。"""
+    """E1-4：剂量-响应，**每条子图只动一个变量**（真正的单轴扫描）。
+
+    左：固定 ρ=ρ_fixed，扫 N_m；右：固定 N_m=N_m_fixed，扫 ρ。原实现把每个
+    边际都用**全部**数据分组，于是两条线各自混进了另一个变量——没有意义。
+    """
     fig, (left, right) = plt.subplots(1, 2, figsize=(9.6, 4.2))
-    for axis, column, label in ((left, "bad_client_num",
-                                 "Number of malicious clients"),
-                                (right, "poison_rate",
-                                 "Poisoning probability rho")):
-        # 另一个变量固定的那条线才是"单轴扫描"；其余点作为散点画出来
-        grouped = response.groupby(column)["asr"]
-        xs = sorted(response[column].unique())
-        means = [float(grouped.get_group(x).mean()) for x in xs]
-        counts = [int(grouped.get_group(x).size) for x in xs]
+    nm_fixed, rho_fixed = _infer_cross_center(response)
+    panels = (
+        (left, "bad_client_num", "poison_rate", rho_fixed,
+         "Number of malicious clients", f"rho fixed = {rho_fixed:g}"),
+        (right, "poison_rate", "bad_client_num", nm_fixed,
+         "Poisoning probability rho", f"Nm fixed = {nm_fixed}"),
+    )
+    for axis, xcol, other, other_fixed, xlabel, sub in panels:
+        arm = response[response[other] == other_fixed]     # 只保留单轴那条线
+        grouped = arm.groupby(xcol)[["asr"]]
+        xs = sorted(arm[xcol].unique())
+        means = [float(grouped.get_group(x)["asr"].mean()) for x in xs]
         axis.plot(range(len(xs)), means, marker="o", color="tab:blue",
-                  linewidth=1.6)
+                  linewidth=1.8, zorder=2)
         for index, x in enumerate(xs):
-            values = grouped.get_group(x).to_numpy()
-            axis.scatter([index] * len(values), values, s=18, color="0.5",
-                         zorder=3, alpha=0.8)
+            values = grouped.get_group(x)["asr"].to_numpy()
+            axis.scatter([index] * len(values), values, s=22, color="0.5",
+                         zorder=3, alpha=0.85)
+            axis.annotate(f"n={len(values)}", (index, 0.02), fontsize=7,
+                          ha="center", color="0.4")
         axis.set_xticks(range(len(xs)))
         axis.set_xticklabels([f"{x:g}" for x in xs])
-        axis.set_xlabel(label)
+        axis.set_xlabel(f"{xlabel}\n({sub})")
         axis.set_ylim(0.0, 1.0)
         axis.grid(alpha=0.3)
-        for index, n in enumerate(counts):
-            axis.annotate(f"n={n}", (index, 0.02), fontsize=7, ha="center",
-                          color="0.4")
     left.set_ylabel("Backdoor ASR (tail mean)")
-    fig.suptitle("E1-4  Dose-response: where is the effective boundary?")
+    fig.suptitle("E1-4  Dose-response along each single axis")
     return _finish(fig, out_path,
-                   "Grey dots are individual runs (seeds); blue line is their "
-                   "mean.  Because the sweep is a cross rather than a full "
-                   "grid,\neach marginal mixes the other variable - read the "
-                   "grey dots, not just the line.")
+                   "Each panel holds the other variable fixed at the cross "
+                   "centre, so it is a true single-axis sweep.  Grey dots are "
+                   "individual seeds; blue line is their mean.")
 
 
 def restrict_to_common_dose(frame: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
@@ -648,8 +663,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                   out_dir / "exp1_E1_asr_vs_round.png"),
         plot_e1_2(stage1 if not stage1.empty else frame,
                   out_dir / "exp1_E2_asr_vs_mta.png", verdict),
-        plot_e1_3(stage1 if not stage1.empty else frame,
-                  out_dir / "exp1_E3_asr_vs_loss.png"),
+        # E3（ASR vs clean loss）已移除：与 E2 冗余，且离群 loss 会把点挤成一竖线
     ]
     if not response.empty:
         figures.append(plot_e1_4(response, out_dir / "exp1_E4_dose_response.png"))
