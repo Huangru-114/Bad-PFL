@@ -14,8 +14,9 @@ import pandas as pd
 
 from diag.analysis_exp1 import (crossing_table, dose_response, load_runs,
                                 onset_analysis, persistence_table, plot_e1_1,
-                                plot_e1_2, plot_e1_4, plot_e1b_1, plot_e1b_2,
-                                resolve_asr_column, threshold_verdict)
+                                plot_e1_2, plot_e1_4, plot_e1_5, plot_e1b_1,
+                                plot_e1b_2, resolve_asr_column,
+                                threshold_verdict)
 
 
 def _run(run_id, *, bad=4, rho=0.5, seed=0, schedule="continuous",
@@ -252,6 +253,9 @@ def test_all_figures_render_and_pass_the_cjk_scan():
         assert plot_e1_2(frame, out / "e2.png", verdict).exists()
         assert plot_e1_4(dose_response(frame, tail=3),
                          out / "e4.png").exists()
+        # 稀疏网格（十字扫描）也要能画热力图，缺格留白不报错
+        assert plot_e1_5(dose_response(frame, tail=3),
+                         out / "e5.png").exists()
 
 
 def test_schedule_figures_handle_the_degenerate_cases():

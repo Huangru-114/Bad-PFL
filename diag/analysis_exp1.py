@@ -6,6 +6,7 @@
 E1-1    ASR vs round，每个剂量一条跨 seed 均值线                后门什么时候形成
 E1-2    ASR vs MTA 散点（色=剂量, marker=seed）                MTA* 存在吗
 E1-4    剂量-响应：各子图只动一个变量（真单轴扫描）             有效边界在哪
+E1-5    剂量-响应热力图（N_m × ρ_p 的最终 ASR）                有效边界的形状（全网格）
 E1B-1   各调度的 ASR_t，投毒轮次加底色                          时间结构的影响
 E1B-2   停攻后对齐的 ASR_{t+k}                                后门能自持吗
 ======  ==================================================  ================
@@ -47,7 +48,7 @@ from .analysis import assert_no_cjk_in_figure
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
            "onset_analysis", "dose_response", "persistence_table",
-           "plot_e1_1", "plot_e1_2", "plot_e1_4",
+           "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5",
            "plot_e1b_1", "plot_e1b_2", "main"]
 
 ASR_COLUMN = "asr_personalized_targeted"
@@ -487,6 +488,48 @@ def plot_e1_4(response: pd.DataFrame, out_path) -> Path:
                    "individual seeds; blue line is their mean.")
 
 
+def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
+    """E1-5：剂量-响应**热力图**（N_m × ρ_p 的最终 ASR），全因子网格的正确读法。
+
+    十字扫描下网格是稀疏的（大量空格），热力图照样能画——缺的格子留白，不用
+    0 填（铁律：无定义留空）。全因子填满后，这张图一眼看出有效边界的形状。
+    """
+    pivot = response.pivot_table(index="bad_client_num", columns="poison_rate",
+                                 values="asr", aggfunc="mean")
+    pivot = pivot.sort_index(ascending=True).sort_index(axis=1)
+    rows = [int(r) for r in pivot.index]
+    cols = [float(c) for c in pivot.columns]
+    data = pivot.to_numpy(dtype=float)
+
+    fig, axis = plt.subplots(figsize=(1.4 * len(cols) + 2.6,
+                                      0.7 * len(rows) + 2.2))
+    mesh = axis.imshow(data, origin="lower", aspect="auto", cmap="viridis",
+                       vmin=0.0, vmax=1.0)
+    axis.set_xticks(range(len(cols)))
+    axis.set_xticklabels([f"{c:g}" for c in cols])
+    axis.set_yticks(range(len(rows)))
+    axis.set_yticklabels([str(r) for r in rows])
+    axis.set_xlabel("Poisoning probability rho")
+    axis.set_ylabel("Number of malicious clients Nm")
+    # 每格标数值；缺失格留白并写 "-"，让"没跑"与"跑出来是 0"区分开
+    for i in range(len(rows)):
+        for j in range(len(cols)):
+            value = data[i, j]
+            if np.isfinite(value):
+                axis.text(j, i, f"{value:.2f}", ha="center", va="center",
+                          fontsize=8,
+                          color="white" if value < 0.55 else "black")
+            else:
+                axis.text(j, i, "-", ha="center", va="center", fontsize=8,
+                          color="0.6")
+    fig.colorbar(mesh, ax=axis, label="Backdoor ASR (tail mean)", shrink=0.85)
+    axis.set_title("E1-5  Dose-response surface (ASR over the Nm x rho grid)")
+    return _finish(fig, out_path,
+                   "Cells are the tail-mean ASR averaged over seeds.  Blank/'-' "
+                   "cells were not run (cross sweep leaves them empty; a full "
+                   "grid fills them).")
+
+
 def restrict_to_common_dose(frame: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     """把 1B 的对比限制在**同一个剂量**上。
 
@@ -667,6 +710,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ]
     if not response.empty:
         figures.append(plot_e1_4(response, out_dir / "exp1_E4_dose_response.png"))
+        figures.append(plot_e1_5(response, out_dir / "exp1_E5_dose_heatmap.png"))
     if stage1b["schedule"].nunique() > 1:
         figures.append(plot_e1b_1(stage1b, out_dir / "exp1b_B1_schedules.png"))
     figures.append(plot_e1b_2(persistence, out_dir / "exp1b_B2_persistence.png"))
