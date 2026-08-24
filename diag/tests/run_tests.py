@@ -42,6 +42,7 @@ TEST_MODULES = [
     "diag.tests.test_analysis_exposure",
     "diag.tests.test_schedule",
     "diag.tests.test_analysis_exp1",
+    "diag.tests.test_run_exp1",
     "diag.tests.test_represent",
 ]
 

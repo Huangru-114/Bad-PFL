@@ -34,10 +34,13 @@ import argparse
 import subprocess
 from typing import Any, Dict, List, Optional, Sequence
 
+from pathlib import Path
+
 from .config import Cfg, load_config
 from .schedule import AttackSchedule
 
-__all__ = ["dose_points", "build_commands", "estimate_cost", "main"]
+__all__ = ["dose_points", "build_commands", "estimate_cost",
+           "implantation_csv", "csv_has_paper_column", "main"]
 
 
 def dose_points(bad_nums: Sequence[int], poison_rates: Sequence[float],
@@ -98,6 +101,31 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
     ]
 
 
+def implantation_csv(results_dir: str, alpha: float, seed: int, tag: str) -> str:
+    """run_fl 会写出的植入 CSV 路径。
+
+    与 run_fl 的命名严格一致：
+    ``exp_ij_implantation_<defense>_<mode>_a<alpha>_s<seed>_<run-tag>.csv``。
+    exp1 里 defense 恒为 fedavg、mode 恒为 attack（见 _base_command）。
+    """
+    base = f"attack_a{alpha}_s{int(seed)}_{tag}"
+    return str(Path(results_dir) / f"exp_ij_implantation_fedavg_{base}.csv")
+
+
+def csv_has_paper_column(path: str) -> bool:
+    """CSV 是否已带论文口径列 ``asr_paper_all``（= 新代码跑出来的，可复用）。
+
+    只读表头，不依赖 pandas。文件不存在 / 读不到都算"没有"，从而会被重跑。
+    旧口径的 CSV（无此列）一律判为需重跑，避免把 perturb 口径当新结果并进来。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            header = handle.readline()
+    except OSError:
+        return False
+    return "asr_paper_all" in [c.strip() for c in header.split(",")]
+
+
 def build_commands(cfg: Cfg, stage: str = "all", *,
                    instrument_root: str = "instrumentation",
                    results_dir: str = "results/raw",
@@ -124,7 +152,9 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                 cmd += ["--bad-client-num", str(point["bad_num"]),
                         "--poison-rate", str(point["poison_rate"]),
                         "--run-tag", tag]
-                jobs.append({"tag": tag, "stage": "1", "cmd": cmd})
+                jobs.append({"tag": tag, "stage": "1", "cmd": cmd,
+                             "csv": implantation_csv(results_dir, alpha, seed,
+                                                     tag)})
 
     if stage in ("1b", "all"):
         # 1B 固定剂量，只变时间结构 —— 剂量和时间同时变就分不清是谁的作用
@@ -146,7 +176,9 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                 for name, value in spec.items():
                     cmd += [f"--attack-{name.replace('_', '-')}", str(value)]
                 jobs.append({"tag": tag, "stage": "1b", "cmd": cmd,
-                             "describe": schedule.describe()})
+                             "describe": schedule.describe(),
+                             "csv": implantation_csv(results_dir, alpha, seed,
+                                                     tag)})
     return jobs
 
 
@@ -180,6 +212,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ckpt-root", default="./checkpoints")
     parser.add_argument("--execute", action="store_true",
                         help="真正执行；缺省只打印")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="跳过植入 CSV 已带论文口径列 asr_paper_all 的 run —— "
+                             "省机时。旧口径（无该列）的 CSV 仍会重跑。")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -201,17 +236,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  ⚠️ 每个 run 只有 {cost['asr_mta_points_per_run']} 个配对，"
               f"散点图上看不出转折。把 exp1.eval_every 调小。")
 
+    # --skip-existing：把已带论文口径列的 run 标记出来，不再重训
+    if args.skip_existing:
+        for job in jobs:
+            job["skip"] = csv_has_paper_column(job.get("csv", ""))
+        n_skip = sum(1 for j in jobs if j.get("skip"))
+        print(f"  [--skip-existing] {n_skip}/{len(jobs)} 个 run 的 CSV 已带 "
+              f"asr_paper_all，将跳过；实跑 {len(jobs) - n_skip} 个。")
+
     print()
     for job in jobs:
         note = f"   # {job['describe']}" if "describe" in job else ""
-        print(" ".join(job["cmd"]) + note)
+        flag = "  [SKIP: 已有 asr_paper_all]" if job.get("skip") else ""
+        print(" ".join(job["cmd"]) + note + flag)
 
     if not args.execute:
         print(f"\n[dry-run] 以上 {len(jobs)} 条命令**未执行**。加 --execute 才真跑。")
         return 0
 
-    for index, job in enumerate(jobs, 1):
-        print(f"\n[{index}/{len(jobs)}] {job['tag']}")
+    todo = [j for j in jobs if not j.get("skip")]
+    for index, job in enumerate(todo, 1):
+        print(f"\n[{index}/{len(todo)}] {job['tag']}")
         result = subprocess.run(job["cmd"])
         if result.returncode != 0:
             # 不继续跑剩下的：后面的分析会把缺失的 run 当成"没测过"，
