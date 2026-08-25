@@ -357,81 +357,141 @@ def _seed_mean_curve(group: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_index()
 
 
-def plot_e1_1(frame: pd.DataFrame, out_path) -> Path:
-    """E1-1：ASR vs round，**每个剂量一条跨 seed 的均值线**（不是每 seed 一条）。
+_VAR_SHORT = {"bad_client_num": "Nm", "poison_rate": "rho"}
 
-    seed 之间的包络用浅色填充带表示，剂量之间用对比色区分。
+
+def _fmt_level(var: str, value: Any) -> str:
+    """把一个变量的取值格式化成 legend/标题用的短标签。"""
+    short = _VAR_SHORT.get(var, var)
+    return (f"{short}={int(value)}" if var == "bad_client_num"
+            else f"{short}={float(value):g}")
+
+
+def _level_colors(values: Sequence[Any]) -> Dict[Any, Any]:
+    """给一组取值分配对比色（tab10），颜色在所有分面里保持一致。"""
+    keys = sorted(set(values))
+    palette = plt.get_cmap("tab10" if len(keys) <= 10 else "tab20")
+    return {key: palette(i % palette.N) for i, key in enumerate(keys)}
+
+
+def _facet_layout(n: int) -> Tuple[int, int]:
+    ncol = min(3, max(1, n))
+    nrow = (n + ncol - 1) // ncol
+    return nrow, ncol
+
+
+def _fig_axis_labels(fig, xlabel: str, ylabel: str) -> None:
+    """给整张分面图加公共 x/y 轴标签。
+
+    用 ``fig.text`` 而非 ``fig.supxlabel/supylabel`` —— 后者要 matplotlib>=3.4，
+    集群版本未知，为免在出图阶段直接崩掉，退回到到处都有的 ``fig.text``。
     """
-    fig, axis = plt.subplots(figsize=(7.6, 4.8))
-    colors = _dose_colors(frame)
-    doses = sorted({(int(b), float(p)) for b, p in
-                    zip(frame["bad_client_num"], frame["poison_rate"])})
-    for key in doses:
-        block = frame[(frame["bad_client_num"] == key[0])
-                      & (frame["poison_rate"] == key[1])]
-        curve = _seed_mean_curve(block)
-        rounds = curve.index.to_numpy(dtype=float)
-        axis.fill_between(rounds, curve["min"], curve["max"],
-                          color=colors[key], alpha=0.15, linewidth=0)
-        axis.plot(rounds, curve["mean"], color=colors[key], linewidth=2.0,
-                  marker="o", markersize=3, label=_dose_label(key))
-    axis.set_xlabel("Communication round")
-    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
-    axis.set_ylim(0.0, 1.0)
-    axis.grid(alpha=0.3)
-    axis.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                borderaxespad=0.0, title="dose (mean over seeds)")
-    axis.set_title("E1-1  Backdoor formation over training")
+    fig.text(0.5, 0.015, xlabel, ha="center", fontsize=10)
+    fig.text(0.008, 0.5, ylabel, va="center", rotation="vertical", fontsize=10)
+
+
+def _facet_grid(facet_by: str):
+    """(nrow, ncol, fig, axes_flat) —— 供 E1/E2 分面复用的画布。"""
+    def build(n: int):
+        nrow, ncol = _facet_layout(n)
+        fig, axes = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.2 * nrow),
+                                 sharex=True, sharey=True, squeeze=False)
+        return fig, axes.ravel()
+    return build
+
+
+def plot_e1_1(frame: pd.DataFrame, out_path, *,
+              facet_by: str = "bad_client_num",
+              line_by: str = "poison_rate") -> Path:
+    """E1-1：ASR vs round，**分面小多图**。
+
+    每个分面固定 ``facet_by`` 的一个取值，面内按 ``line_by`` 的每个取值画一条
+    跨 seed 均值线（min-max 包络带）。颜色按 ``line_by`` 统一，跨面可比。
+    默认按 N_m 分面、面内不同 ρ；调用方再传 ``facet_by="poison_rate"`` 出另一版。
+    """
+    facets = sorted(frame[facet_by].unique())
+    colors = _level_colors(frame[line_by].tolist())
+    fig, axes = _facet_grid(facet_by)(len(facets))
+    for axis, fval in zip(axes, facets):
+        block = frame[frame[facet_by] == fval]
+        for lval in sorted(block[line_by].unique()):
+            sub = block[block[line_by] == lval]
+            curve = _seed_mean_curve(sub)
+            rounds = curve.index.to_numpy(dtype=float)
+            axis.fill_between(rounds, curve["min"], curve["max"],
+                              color=colors[lval], alpha=0.15, linewidth=0)
+            axis.plot(rounds, curve["mean"], color=colors[lval], linewidth=1.8,
+                      marker="o", markersize=2.5, label=_fmt_level(line_by, lval))
+        axis.set_title(_fmt_level(facet_by, fval), fontsize=9)
+        axis.set_ylim(0.0, 1.0)
+        axis.grid(alpha=0.3)
+    for axis in axes[len(facets):]:      # 多出来的空面隐藏
+        axis.set_axis_off()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=8, loc="center right",
+               title=_VAR_SHORT.get(line_by, line_by))
+    _fig_axis_labels(fig, "Communication round",
+                     f"Backdoor ASR [{ASR_COLUMN}]")
+    fig.suptitle(f"E1-1  Backdoor formation (faceted by "
+                 f"{_VAR_SHORT.get(facet_by, facet_by)}, mean over seeds)")
     return _finish(fig, out_path,
-                   "Solid line = mean over seeds for that dose; shaded band = "
-                   "min-max across seeds.  Nm = number of malicious clients; "
-                   "rho = per-sample poisoning probability.")
+                   "One panel per "
+                   f"{_VAR_SHORT.get(facet_by, facet_by)}; one line per "
+                   f"{_VAR_SHORT.get(line_by, line_by)} (mean over seeds, band "
+                   "= min-max).")
 
 
 def plot_e1_2(frame: pd.DataFrame, out_path,
-              verdict: Optional[Dict[str, Any]] = None) -> Path:
-    """E1-2：ASR vs MTA —— **散点**（不连线），对比色分剂量、marker 分 seed。"""
-    fig, axis = plt.subplots(figsize=(7.6, 5.0))
-    colors = _dose_colors(frame)
+              verdict: Optional[Dict[str, Any]] = None, *,
+              facet_by: str = "bad_client_num",
+              line_by: str = "poison_rate") -> Path:
+    """E1-2：ASR vs MTA 散点，**分面小多图**。
+
+    面内不连线（run 内 MTA 随 t 单调，连线只是把 ASR~t 换个横轴）；颜色按
+    ``line_by`` 统一、marker 按 seed。阈值判据的 MTA 竖线在每个面里都画。
+    """
+    facets = sorted(frame[facet_by].unique())
+    colors = _level_colors(frame[line_by].tolist())
     markers = ["o", "s", "^", "D", "v", "P"]
     seeds = sorted(frame["seed"].unique())
-    seen = set()
-    for run_id, group in frame.groupby("run_id"):
-        first = group.iloc[0]
-        key = (int(first["bad_client_num"]), float(first["poison_rate"]))
-        marker = markers[seeds.index(int(first["seed"])) % len(markers)]
-        label = _dose_label(key) if key not in seen else None
-        seen.add(key)
-        # 纯散点：run 内 MTA 随 t 单调，连线只会画出一条与 ASR~t 同形的假趋势
-        axis.scatter(group[MTA_COLUMN], group[ASR_COLUMN], color=colors[key],
-                     marker=marker, s=16, alpha=0.75, edgecolors="none",
-                     label=label)
-
-    if verdict and np.isfinite(verdict.get("mta_at_cross_mean", np.nan)):
-        mean = verdict["mta_at_cross_mean"]
-        std = verdict.get("mta_at_cross_std", 0.0)
-        axis.axvspan(mean - std, mean + std, color="crimson", alpha=0.12,
-                     zorder=0)
-        axis.axvline(mean, color="crimson", linestyle=":", linewidth=1.4)
-        axis.annotate(f"MTA at ASR={verdict['level']:g}: "
-                      f"{mean:.3f}+/-{std:.3f}",
-                      (mean, 0.97), fontsize=8, color="crimson",
-                      ha="center", va="top",
-                      bbox=dict(boxstyle="round,pad=0.25", fc="white",
-                                ec="crimson", alpha=0.85))
-
-    axis.set_xlabel("Main task accuracy (MTA, personalized)")
-    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
-    axis.set_ylim(0.0, 1.0)
-    axis.grid(alpha=0.3)
-    axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                borderaxespad=0.0)
-    axis.set_title("E1-2  Does ASR take off at a common MTA?")
+    fig, axes = _facet_grid(facet_by)(len(facets))
+    for axis, fval in zip(axes, facets):
+        block = frame[frame[facet_by] == fval]
+        seen = set()
+        for run_id, group in block.groupby("run_id"):
+            first = group.iloc[0]
+            lval = first[line_by]
+            marker = markers[seeds.index(int(first["seed"])) % len(markers)]
+            label = _fmt_level(line_by, lval) if lval not in seen else None
+            seen.add(lval)
+            axis.scatter(group[MTA_COLUMN], group[ASR_COLUMN],
+                         color=colors[lval], marker=marker, s=14, alpha=0.75,
+                         edgecolors="none", label=label)
+        if verdict and np.isfinite(verdict.get("mta_at_cross_mean", np.nan)):
+            axis.axvline(verdict["mta_at_cross_mean"], color="crimson",
+                         linestyle=":", linewidth=1.2)
+        axis.set_title(_fmt_level(facet_by, fval), fontsize=9)
+        axis.set_ylim(0.0, 1.0)
+        axis.grid(alpha=0.3)
+    for axis in axes[len(facets):]:
+        axis.set_axis_off()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=8, loc="center right",
+               title=_VAR_SHORT.get(line_by, line_by))
+    _fig_axis_labels(fig, "Main task accuracy (MTA, personalized)",
+                     f"Backdoor ASR [{ASR_COLUMN}]")
+    facet_short = _VAR_SHORT.get(facet_by, facet_by)
+    has_line = bool(verdict and np.isfinite(
+        verdict.get("mta_at_cross_mean", np.nan)))
+    title = f"E1-2  ASR vs MTA (faceted by {facet_short})"
+    if has_line:
+        title += f"; dotted line = MTA at ASR={verdict['level']:g}"
+    fig.suptitle(title)
     return _finish(fig, out_path,
-                   "Scatter (no connecting lines); colour = dose, marker = "
-                   "seed.  Within one run MTA is monotone in t, so this plot "
-                   "alone cannot separate t->MTA from MTA->ASR;\n"
-                   "that separation comes from the 1B schedules (see E1B-1).")
+                   "Scatter (no connecting lines); colour = "
+                   f"{_VAR_SHORT.get(line_by, line_by)}, marker = seed.  Within "
+                   "a run MTA is monotone in t, so this cannot separate t->MTA "
+                   "from MTA->ASR; that needs the 1B schedules.")
 
 
 def _infer_cross_center(response: pd.DataFrame) -> Tuple[int, float]:
@@ -701,11 +761,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"\n  ⚠️ 只有一种调度（{onset['schedule'].iloc[0]}），"
               f"1B 的识别策略用不上。跑 `python -m diag.run_exp1 --stage 1b`。")
 
+    e1frame = stage1 if not stage1.empty else frame
     figures = [
-        plot_e1_1(stage1 if not stage1.empty else frame,
-                  out_dir / "exp1_E1_asr_vs_round.png"),
-        plot_e1_2(stage1 if not stage1.empty else frame,
-                  out_dir / "exp1_E2_asr_vs_mta.png", verdict),
+        # E1 / E2 各出两版：按 N_m 分面、按 ρ 分面
+        plot_e1_1(e1frame, out_dir / "exp1_E1_asr_vs_round_by_nm.png",
+                  facet_by="bad_client_num", line_by="poison_rate"),
+        plot_e1_1(e1frame, out_dir / "exp1_E1_asr_vs_round_by_rho.png",
+                  facet_by="poison_rate", line_by="bad_client_num"),
+        plot_e1_2(e1frame, out_dir / "exp1_E2_asr_vs_mta_by_nm.png", verdict,
+                  facet_by="bad_client_num", line_by="poison_rate"),
+        plot_e1_2(e1frame, out_dir / "exp1_E2_asr_vs_mta_by_rho.png", verdict,
+                  facet_by="poison_rate", line_by="bad_client_num"),
         # E3（ASR vs clean loss）已移除：与 E2 冗余，且离群 loss 会把点挤成一竖线
     ]
     if not response.empty:
