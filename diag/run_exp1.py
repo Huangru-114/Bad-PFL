@@ -80,7 +80,9 @@ def _tag(prefix: str, **parts: Any) -> str:
 
 def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
                   instrument_root: str, results_dir: str,
-                  ckpt_root: str) -> List[str]:
+                  ckpt_root: str, total_round: Optional[int] = None
+                  ) -> List[str]:
+    rounds = int(cfg_exp1.total_round if total_round is None else total_round)
     return [
         "python", "-m", "diag.run_fl",
         "--mode", "attack",
@@ -91,7 +93,7 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
         "--select-per-round", str(int(cfg_exp1.select_per_round)),
         "--local-steps", str(int(cfg_exp1.local_steps)),
         "--model-size", str(int(cfg_exp1.model_size)),
-        "--total-round", str(int(cfg_exp1.total_round)),
+        "--total-round", str(rounds),
         "--eval-every", str(int(cfg_exp1.eval_every)),
         "--eval-include-malicious",
         "--layer-metrics",
@@ -179,6 +181,37 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                              "describe": schedule.describe(),
                              "csv": implantation_csv(results_dir, alpha, seed,
                                                      tag)})
+
+    if stage in ("persist", "all") and "persistence" in exp1:
+        # B2 专用长跑：攻击窗口 [start, end) 把 ASR 顶到高位，再干净训练到 total。
+        # 用 burst(start, end-start) 表达；burst 之后自动是干净轮次。
+        pers = exp1.persistence
+        bad = int(exp1.bad_num_fixed)
+        rate = float(exp1.poison_rate_fixed)
+        total = int(pers.total_round)
+        a_start = int(pers.attack_start)
+        a_len = int(pers.attack_end) - a_start
+        # 就地校验：窗口非法（如 end<=start 或超出总轮数）立刻报错
+        AttackSchedule(kind="burst", start=a_start, length=a_len)
+        if a_start + a_len > total:
+            raise ValueError(
+                f"persistence 攻击窗口 [{a_start},{a_start + a_len}) 超出 "
+                f"total_round={total} —— 停攻后就没有干净轮次可观察衰减了")
+        for seed in seeds:
+            tag = _tag("e1b_persist", s=seed)
+            cmd = _base_command(exp1, seed, alpha, instrument_root,
+                                results_dir, ckpt_root, total_round=total)
+            cmd += ["--bad-client-num", str(bad),
+                    "--poison-rate", str(rate),
+                    "--attack-schedule", "burst",
+                    "--attack-start", str(a_start),
+                    "--attack-length", str(a_len),
+                    "--run-tag", tag]
+            jobs.append({"tag": tag, "stage": "persist", "cmd": cmd,
+                         "describe": (f"implant-then-clean: attack "
+                                      f"[{a_start},{a_start + a_len}) of "
+                                      f"{total} rounds"),
+                         "csv": implantation_csv(results_dir, alpha, seed, tag)})
     return jobs
 
 
@@ -202,7 +235,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="实验 1 / 1B 的命令生成器（默认 dry-run）")
     parser.add_argument("--config", default=None)
-    parser.add_argument("--stage", default="all", choices=["1", "1b", "all"])
+    parser.add_argument("--stage", default="all",
+                        choices=["1", "1b", "persist", "all"])
     parser.add_argument("--seeds", type=int, nargs="*", default=None)
     parser.add_argument("--full-grid", action="store_true",
                         help="全因子而不是十字扫描。第一阶段不要用 —— "

@@ -8,7 +8,7 @@ E1-2    ASR vs MTA 散点（色=剂量, marker=seed）                MTA* 存�
 E1-4    剂量-响应：各子图只动一个变量（真单轴扫描）             有效边界在哪
 E1-5    剂量-响应热力图（N_m × ρ_p 的最终 ASR）                有效边界的形状（全网格）
 E1B-1   各调度的 ASR_t，投毒轮次加底色                          时间结构的影响
-E1B-2   停攻后对齐的 ASR_{t+k}                                后门能自持吗
+E1B-2   植入到高位后停攻，ASR 多久从高位掉下来（半衰期）        后门自持多久（需 persist 长跑）
 ======  ==================================================  ================
 
 # 为什么 ASR-vs-MTA 单独证明不了因果
@@ -284,6 +284,9 @@ def persistence_table(frame: pd.DataFrame) -> pd.DataFrame:
             continue                    # 从没攻击过，或到最后仍在攻击
         last_active = int(np.flatnonzero(active)[-1])
         first = group.iloc[0]
+        # 停攻当轮的 ASR（k=0）—— "从多高开始掉"的基准。低于阈值说明这条 run
+        # 根本没植入，"衰减"无从谈起，画图时据此过滤。
+        asr_at_stop = float(group.iloc[last_active][ASR_COLUMN])
         for offset in range(last_active, len(group)):
             row = group.iloc[offset]
             rows.append({
@@ -293,6 +296,7 @@ def persistence_table(frame: pd.DataFrame) -> pd.DataFrame:
                     row["round"] - group.iloc[last_active]["round"]),
                 "asr": float(row[ASR_COLUMN]),
                 "mta": float(row[MTA_COLUMN]),
+                "asr_at_stop": asr_at_stop,
             })
     return pd.DataFrame(rows)
 
@@ -654,30 +658,62 @@ def plot_e1b_1(frame: pd.DataFrame, out_path) -> Path:
                    "would confound timing with dose.")
 
 
-def plot_e1b_2(persistence: pd.DataFrame, out_path) -> Path:
-    """E1B-2：停攻后对齐的衰减曲线。"""
-    fig, axis = plt.subplots(figsize=(7.2, 4.6))
+def plot_e1b_2(persistence: pd.DataFrame, out_path,
+               min_implant: float = 0.5) -> Path:
+    """E1B-2：**后门植入到高位后，停攻多少轮才从高位掉下来**。
+
+    横轴 = 停攻后第几轮，纵轴 = 绝对 ASR（对齐在停攻点 k=0）。只纳入停攻当轮
+    ASR >= ``min_implant`` 的 run —— 没植入的 run 谈不上"从高位下落"，纳进来
+    只会把图压平。每条曲线标注起始高度 ``asr_at_stop`` 与**半衰点**（首个
+    ASR 跌破 0.5×起始 的停后轮数），后者直接回答"多久掉下来"。
+    """
+    fig, axis = plt.subplots(figsize=(7.6, 4.8))
     if persistence.empty:
         axis.text(0.5, 0.5,
                   "no run stopped attacking before the end of training",
                   ha="center", va="center", transform=axis.transAxes)
         axis.set_axis_off()
         return _finish(fig, out_path)
-    for kind, block in persistence.groupby("schedule"):
+
+    kept = persistence
+    if "asr_at_stop" in persistence.columns:
+        kept = persistence[persistence["asr_at_stop"] >= float(min_implant)]
+    if kept.empty:
+        axis.text(0.5, 0.5,
+                  f"no run reached ASR >= {min_implant:g} at the stop point\n"
+                  f"(nothing was implanted, so there is no 'decay from high' "
+                  f"to show)", ha="center", va="center",
+                  transform=axis.transAxes)
+        axis.set_axis_off()
+        return _finish(fig, out_path)
+
+    colors = _level_colors(sorted(kept["schedule"].unique()))
+    for kind, block in kept.groupby("schedule"):
         grouped = block.groupby("rounds_since_attack_stopped")["asr"]
         xs = sorted(grouped.groups)
-        axis.plot(xs, [float(grouped.get_group(x).mean()) for x in xs],
-                  marker="o", markersize=4, linewidth=1.5, label=str(kind))
+        ys = [float(grouped.get_group(x).mean()) for x in xs]
+        start = float(block["asr_at_stop"].mean()) if "asr_at_stop" \
+            in block.columns else ys[0]
+        # 半衰点：首个跌破 0.5×起始 的停后轮数
+        half = next((x for x, y in zip(xs, ys) if y < 0.5 * start), None)
+        label = f"{kind} (start={start:.2f}" + (
+            f", half@{half}" if half is not None else ", no half") + ")"
+        axis.plot(xs, ys, marker="o", markersize=4, linewidth=1.6,
+                  color=colors[kind], label=label)
+        if half is not None:
+            axis.axvline(half, color=colors[kind], linestyle=":", linewidth=1.0,
+                         alpha=0.7)
     axis.set_xlabel("Rounds since the attack stopped")
     axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
-    axis.legend(fontsize=8)
-    axis.set_title("E1B-2  Does the backdoor persist without fresh poisoning?")
+    axis.legend(fontsize=8, title="schedule (start ASR, half-life)")
+    axis.set_title("E1B-2  How fast does ASR fall once poisoning stops?")
     return _finish(fig, out_path,
-                   "Curves are aligned at the last poisoned round, then "
-                   "averaged over seeds.  'continuous' never stops and is "
-                   "absent by construction.")
+                   "Aligned at the last poisoned round, averaged over seeds.  "
+                   f"Only runs with ASR >= {min_implant:g} at the stop point "
+                   "are shown (others were never implanted).  Dotted vertical "
+                   "line = half-life (first round below half the start ASR).")
 
 
 # ---------------------------------------------------------------------------
@@ -716,18 +752,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  {asr_note}")
     print(f"[analysis_exp1] ASR 口径 = {ASR_COLUMN}")
 
-    stage1 = frame[frame["schedule"] == "continuous"]
-    stage1b = frame
+    # 持续性长跑（run_id 带 "persist"）是独立实验（400 轮），不能混进 stage-1
+    # 与 1B-timing 的分析，否则它那条 400 轮的 burst 会污染阈值/剂量/调度图。
+    is_persist = frame["run_id"].str.contains("persist", na=False)
+    persist_runs = frame[is_persist]
+    core = frame[~is_persist]
 
-    crossings = crossing_table(frame, args.level)
+    stage1 = core[core["schedule"] == "continuous"]
+    stage1b = core
+
+    crossings = crossing_table(core, args.level)
     crossings.to_csv(f"{prefix}_crossings.csv", index=False)
-    verdict = threshold_verdict(crossings, frame)
+    verdict = threshold_verdict(crossings, core)
 
-    response = dose_response(stage1 if not stage1.empty else frame, args.tail)
+    response = dose_response(stage1 if not stage1.empty else core, args.tail)
     response.to_csv(f"{prefix}_dose_response.csv", index=False)
-    onset = onset_analysis(frame)
+    onset = onset_analysis(core)
     onset.to_csv(f"{prefix}_onset.csv", index=False)
-    persistence = persistence_table(restrict_to_common_dose(frame)[0])
+    # B2 优先用专用的持续性长跑（攻击到高位再纯干净训练）。没有它时退回旧法
+    # （1B 里停过攻的 early/burst），但那些停得早、未必到高位。
+    if not persist_runs.empty:
+        persistence = persistence_table(persist_runs)
+        print(f"[analysis_exp1] B2 用专用持续性长跑："
+              f"{persist_runs['run_id'].nunique()} 个 run")
+    else:
+        persistence = persistence_table(restrict_to_common_dose(frame)[0])
+        print("[analysis_exp1] ⚠️ 没找到 persist 长跑，B2 退回 early/burst"
+              "（停得早、未必到高位）。跑 `run_exp1 --stage persist` 得到正确的 B2。")
     if not persistence.empty:
         persistence.to_csv(f"{prefix}_persistence.csv", index=False)
 

@@ -59,6 +59,15 @@ exp1:
     - {kind: after_mta, mta_threshold: 0.6}
     - {kind: early, end: 60}
     - {kind: late, start: 140}
+  # B2（后门持续性）专用的长跑：先用 late 的窗口 [attack_start, attack_end) 把
+  # ASR 顶到高位，再**纯干净训练**到 total_round，观察它多久从高位掉下来。
+  # = "200（late 方案）+ 200 干净训练"，用一个 400 轮单跑实现（攻击只在窗口内，
+  # 其余轮次 poison_func 与生成器训练都门控关闭）。剂量沿用上面的 *_fixed。
+  # ⚠️ 这条**必须**在能植入的剂量上跑，否则"从高位下落"无从谈起。
+  persistence:
+    total_round: 400
+    attack_start: 140
+    attack_end: 200
 
 # ---------------------------------------------------------------------------
 # 正式扫描矩阵。run_matrix.py 读取；本次任务不执行。

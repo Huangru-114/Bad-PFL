@@ -389,9 +389,11 @@ invariant→`effective_trim_n`），所以 **FLAME 的裁剪与 Invariant 的掩
 **共享参数的聚合规则**，所以「FedBN + 不设防」就是 `--defense fedavg`。
 
 ```bash
-python -m diag.run_exp1                # 打印命令，不执行
-python -m diag.run_exp1 --stage 1b     # 只看 1B 的六种调度
-python -m diag.run_exp1 --execute      # 真跑（第一阶段 14 + 12 = 26 个 run）
+python -m diag.run_exp1                     # 打印命令，不执行
+python -m diag.run_exp1 --stage 1b          # 只看 1B 的六种调度
+python -m diag.run_exp1 --stage persist     # B2 专用长跑：植入到高位再纯干净训练
+python -m diag.run_exp1 --full-grid --seeds 0 --skip-existing   # 全网格、单 seed、只补缺
+python -m diag.run_exp1 --execute           # 真跑
 
 python -m diag.analysis_exp1        # 默认 glob 已匹配 run_fl 的真实文件名
 # 如需指定：run_fl 写出的名字是
