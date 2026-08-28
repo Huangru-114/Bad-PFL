@@ -378,6 +378,30 @@ least two devices, cuda:0 and cpu!`
   一次，PGD 仅 1 迭代，相对训练可忽略。要全 40 客户端的真·全体均值，把
   `eval_client_ids` 放宽到全部良性即可。
 
+### 埋点 13. 后门持续性的三条对比线（触发器冻结程度）
+
+B2 问的是"植入到高位后，停攻多久 ASR 从高位掉下来"。但 Bad-PFL 的触发器
+`x+ξ+δ` 里 **ξ 每次评估都对当前模型现算**（在线对抗），δ 是生成器学出来的。
+所以"持续性"要分清是**权重记住的**还是**在线再优化撑着的**。用一个 400 轮长跑
+（攻击窗口 `[140,200)` 顶到高位、之后纯干净训练）搭三条线：
+
+| 线 | δ | ξ | 实现 |
+|---|---|---|---|
+| A | 停攻即冻结 | 每评估现算 | persist 跑的 `asr_paper_all`（默认门控冻结 δ） |
+| B | 冻结 | **停攻点快照后复用** | 同一跑加 `--freeze-trigger-eval` → `asr_paper_frozen_*` |
+| C | **衰减段仍在线** | 现算 | persist_online 跑，`--generator-online-from 140`（上界） |
+
+- **schedule.gate_attack** 加 `generator_schedule`：给生成器一个独立于投毒的门控
+  窗口。缺省与投毒同窗（A/B：停攻即冻结 δ）；传 `late(start)` 让 δ 在衰减段继续
+  在线（C）。`test_generator_schedule_keeps_generator_on_after_poison_stops` 盯着。
+- **track._maybe_frozen_asr**：在**第一个停攻评估轮**把每客户端 `(x+ξ+δ)` 评估图
+  快照到 CPU，之后复用同一批图评估当前模型 → `asr_paper_frozen_*`。快照当轮
+  frozen==online，故 A/B 在 k=0 重合；之后分叉，**A−B 的差 = ASR 有多少靠在线 ξ**。
+- **analysis.persistence_curves** 把三条线在**真正的停攻点**（第一个"曾攻击过之后
+  转不攻击"的评估轮）对齐；`plot_e1b_2` 按 label 画三线、标半衰点。
+- run_fl 的 `--generator-online-from` / `--freeze-trigger-eval` 只在 persist 跑开，
+  普通 24 格扫描零开销。
+
 ### 埋点 11. Gram 原语的去重
 
 `gram_matrix` / `pairwise_cosine` / `pairwise_distance` / `pseudo_grad_stack`

@@ -146,7 +146,8 @@ class AttackSchedule:
 
 def gate_attack(clients: Sequence[Any], schedule: AttackSchedule,
                 round_getter: Callable[[], int],
-                mta_getter: Callable[[], Optional[float]]
+                mta_getter: Callable[[], Optional[float]],
+                generator_schedule: Optional[AttackSchedule] = None
                 ) -> Callable[[], None]:
     """按调度门控投毒与生成器训练，返回还原函数。
 
@@ -158,14 +159,24 @@ def gate_attack(clients: Sequence[Any], schedule: AttackSchedule,
 
     ``continuous`` 直接返回空操作 —— 不包装就不会引入任何差异，
     这样"默认设定"与本模块出现之前逐位一致。
+
+    ``generator_schedule``：给**生成器训练**一个**独立于投毒**的门控窗口。
+    缺省（None）时生成器与投毒同窗（= 停攻即冻结 δ，实验 1B 的 A/B 线）。
+    传入独立调度可实现"投毒只在攻击窗口、但生成器在衰减段继续在线"（C 线，
+    上界对照）—— 例如 ``late(start=attack_start)`` 让 δ 在 [start, ∞) 一直更新。
     """
-    if schedule.kind == "continuous":
+    if schedule.kind == "continuous" and generator_schedule is None:
         return lambda: None
 
     restores: List[Callable[[], None]] = []
 
     def _is_on() -> bool:
         return schedule.active_for_round(round_getter(), mta_getter())
+
+    def _gen_on() -> bool:
+        if generator_schedule is None:
+            return _is_on()
+        return generator_schedule.active_for_round(round_getter(), mta_getter())
 
     for client in clients:
         if not getattr(client, "diag_is_malicious", False):
@@ -187,7 +198,7 @@ def gate_attack(clients: Sequence[Any], schedule: AttackSchedule,
             original_hooks = list(hooks)
 
             def _gated_hook(target_client, _hooks=tuple(original_hooks)):
-                if not _is_on():
+                if not _gen_on():        # 生成器用独立门控（缺省与投毒同窗）
                     return
                 for hook in _hooks:
                     hook(target_client)

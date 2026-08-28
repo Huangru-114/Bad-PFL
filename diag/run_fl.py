@@ -182,7 +182,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            poison_rate: Optional[float] = None,
            model_size: Optional[int] = None,
            layer_metrics: bool = False,
-           schedule: Optional["AttackSchedule"] = None) -> Path:
+           schedule: Optional["AttackSchedule"] = None,
+           generator_online_from: Optional[int] = None,
+           freeze_trigger_eval: bool = False) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -440,6 +442,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             # 论文口径 ASR 的评估函数：use_our_attack 返回的 eval_func
             # （poison_ratio=1.0 的 full_poison_func）。clean run 为 None。
             paper_eval_func=(eval_func if mode == "attack" else None),
+            # B 线：停攻点快照触发器图、之后复用（纯权重驻留）。只对 persist 跑开。
+            track_frozen_trigger=bool(freeze_trigger_eval and mode == "attack"),
             probe=probe, target_class=target_class, num_classes=num_classes)
         tracker.attach(server, clients)
 
@@ -497,8 +501,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         def _mta():
             return tracker.last_mta if tracker is not None else None
 
+        # C 线：给生成器一个独立的"在线"窗口（[generator_online_from, ∞)），
+        # 让 δ 在衰减段继续更新，而投毒仍只在 schedule 的窗口内。
+        gen_schedule = None
+        if generator_online_from is not None and int(generator_online_from) > 0:
+            gen_schedule = AttackSchedule("late", start=int(generator_online_from))
         restore_schedule = gate_attack(clients, schedule,
-                                       lambda: _state["round"], _mta)
+                                       lambda: _state["round"], _mta,
+                                       generator_schedule=gen_schedule)
 
         def _on_round_begin_schedule(**kwargs):
             if kwargs.get("server", None) is not server:
@@ -696,6 +706,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--attack-duty", type=int, default=0)
     parser.add_argument("--attack-mta-threshold", type=float,
                         default=float("nan"))
+    # --- 触发器冻结对比（实验 1B 的 B/C 线） ---
+    parser.add_argument("--generator-online-from", type=int, default=None,
+                        help="C 线：从这一轮起让生成器继续在线更新（投毒仍受 "
+                             "--attack-* 窗口约束）。缺省则停攻即冻结 δ（A/B 线）")
+    parser.add_argument("--freeze-trigger-eval", action="store_true",
+                        help="B 线：停攻点快照 (x+ξ+δ) 评估图、之后复用，另存 "
+                             "asr_paper_frozen_*，量纯权重驻留")
     args = parser.parse_args(argv)
 
     schedule = AttackSchedule(
@@ -719,7 +736,9 @@ def main(argv: Optional[List[str]] = None) -> int:
            client_num=args.client_num, select_per_round=args.select_per_round,
            local_steps=args.local_steps, poison_rate=args.poison_rate,
            model_size=args.model_size, layer_metrics=args.layer_metrics,
-           schedule=schedule)
+           schedule=schedule,
+           generator_online_from=args.generator_online_from,
+           freeze_trigger_eval=args.freeze_trigger_eval)
     return 0
 
 

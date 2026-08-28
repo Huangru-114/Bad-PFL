@@ -166,6 +166,32 @@ def test_gate_turns_off_both_poisoning_and_the_generator():
     restore()
 
 
+def test_generator_schedule_keeps_generator_on_after_poison_stops():
+    """C 线：投毒按 burst 窗口关，但生成器按独立的 late 窗口继续在线。"""
+    client = _FakeClient()
+    state = {"round": 0}
+    poison_sched = AttackSchedule("burst", start=1, length=2)   # 投毒 [1,3)
+    gen_sched = AttackSchedule("late", start=1)                 # 生成器 [1,∞)
+    restore = gate_attack([client], poison_sched,
+                          lambda: state["round"], lambda: None,
+                          generator_schedule=gen_sched)
+
+    # 第 1 轮：两者都开
+    state["round"] = 1
+    data, _ = client.poison_func(np.array([1]), np.array([1]))
+    client.registered_funcs["before_local_training"][0](client)
+    assert data[0] == 99 and client.poison_calls == 1 and client.hook_calls == 1
+
+    # 第 5 轮：投毒关（≥3），生成器仍在线（late start=1）
+    state["round"] = 5
+    data, _ = client.poison_func(np.array([1]), np.array([1]))
+    client.registered_funcs["before_local_training"][0](client)
+    assert data[0] == 1                      # 投毒关：干净原样返回
+    assert client.poison_calls == 1          # poison_func 未被调用
+    assert client.hook_calls == 2            # 生成器又训练了一次
+    restore()
+
+
 def test_continuous_installs_no_wrapper_at_all():
     """默认设定必须与本模块出现之前逐位一致 —— 不包装就不会有任何差异。"""
     client = _FakeClient()

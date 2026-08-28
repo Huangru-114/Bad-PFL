@@ -91,6 +91,10 @@ IMPLANTATION_COLUMNS = [
     # 只对良性求平均且经 δ/ξ 重建，两者不可混。asr_paper_all 才对齐 main.py 的
     # "Avg ASR"（全体客户端均值）。
     "asr_paper_benign", "asr_paper_malicious", "asr_paper_all",
+    # B 线：停攻点冻结触发器后的 ASR（仅 --freeze-trigger-eval 的 persist 跑有值，
+    # 停攻前为 nan）。asr_paper_all 是在线 ξ（A/C 线），这个是完全固定触发器。
+    "asr_paper_frozen_benign", "asr_paper_frozen_malicious",
+    "asr_paper_frozen_all",
     # 主任务：mta 是全部样本上的准确率，acc_* 是非目标类样本上的（≠ mta）
     "mta_personalized", "mta_global",
     "clean_loss_personalized", "clean_loss_global",
@@ -109,6 +113,8 @@ EDGE_COLUMNS = [
     "acc_target_class", "asr_targeted", "asr_unfiltered",
     # 论文口径 ASR（原始触发器 + 本客户端自己 test loader，不过滤目标类）
     "asr_paper",
+    # B 线：停攻点冻结触发器后的逐客户端 ASR（停攻前 / 非 persist 跑为 nan）
+    "asr_paper_frozen",
 ]
 
 
@@ -153,6 +159,9 @@ class TrainingTracker:
     # 注意：perturb 的 δ/ξ 分解路径（_evaluate_model）仍在，但**只服务实验 E**
     # （它需要 δ-only/ξ-only 拆分）；exp1 的 ASR 结论一律看 asr_paper_*。
     paper_eval_func: Optional[Any] = None
+    # B 线：停攻点把 (x+ξ+δ) 评估图快照下来、之后复用 —— 触发器完全固定，量的是
+    # 权重是否真记住了后门（vs asr_paper_* 那种 ξ 每评估现算的"在线"版本）。
+    track_frozen_trigger: bool = False
     probe: Any = None
     target_class: int = 0
     num_classes: int = 10
@@ -169,6 +178,10 @@ class TrainingTracker:
     # 本轮攻击是否开启，由 run_fl 每轮从 AttackSchedule 写入
     attack_active: bool = True
     _handlers: List[Any] = field(default_factory=list)
+    # B 线运行时状态：停攻点的触发器图快照（cid -> [(perturbed_cpu, labels_cpu)]）
+    _frozen_batches: Dict[int, Any] = field(default_factory=dict)
+    _frozen_taken: bool = False
+    _attack_ever_active: bool = False
 
     # -- 事件 -------------------------------------------------------------
     def attach(self, server: Any, clients: Sequence[Any]) -> "TrainingTracker":
@@ -357,6 +370,79 @@ class TrainingTracker:
                 model.train()
         return n_correct / n_total if n_total else float("nan")
 
+    def _snapshot_frozen_trigger(self, clients_to_cache: Sequence[Any]) -> None:
+        """停攻点：把每个客户端的 (x+ξ+δ) 评估图快照到 CPU，之后复用。
+
+        快照发生的**当轮**，模型正是停攻时的状态，所以此刻 frozen 与 online 相等
+        （k=0 对齐）；之后模型继续干净训练，frozen 用固定图、online 每轮重算 ξ,
+        两者分叉 —— 分叉量 = ASR 里有多少靠 ξ 在线对抗撑着、多少是权重记住的。
+        """
+        self._frozen_batches = {}
+        for client in clients_to_cache:
+            loader = getattr(client, "test_dataloader", None)
+            if self.paper_eval_func is None or loader is None:
+                continue
+            model = client.local_model
+            was_training = model.training
+            model.eval()
+            batches: List[Any] = []
+            try:
+                for batch in loader:
+                    images = batch[0].to(self.device)
+                    labels = batch[1].to(self.device)
+                    perturbed, _ = self.paper_eval_func(images, labels)
+                    batches.append((perturbed.detach().cpu(),
+                                    labels.detach().cpu()))
+            finally:
+                if was_training:
+                    model.train()
+            self._frozen_batches[int(client.cid)] = batches
+        self._frozen_taken = True
+
+    def _paper_asr_frozen(self, model: Any, cid: int) -> float:
+        """用快照的固定触发器图评估当前 model 的 ASR（不过滤目标类）。"""
+        batches = self._frozen_batches.get(int(cid))
+        if not batches:
+            return float("nan")
+        target = int(self.target_class)
+        was_training = model.training
+        model.eval()
+        n_correct, n_total = 0, 0
+        try:
+            with torch.no_grad():
+                for perturbed_cpu, labels_cpu in batches:
+                    preds = model(perturbed_cpu.to(self.device)).argmax(dim=1)
+                    n_correct += int((preds == target).sum())
+                    n_total += int(labels_cpu.numel())
+        finally:
+            if was_training:
+                model.train()
+        return n_correct / n_total if n_total else float("nan")
+
+    def _maybe_frozen_asr(self, eval_clients: Sequence[Any],
+                          malicious_clients: Sequence[Any]) -> Dict[int, float]:
+        """B 线：需要时在停攻点快照，返回逐客户端的冻结触发器 ASR。
+
+        没开 ``track_frozen_trigger`` 或还没停攻时返回空 dict（列记 nan）。
+        """
+        if not self.track_frozen_trigger:
+            return {}
+        both = list(eval_clients) + list(malicious_clients)
+        stopped = self._attack_ever_active and not bool(self.attack_active)
+        self._attack_ever_active = (self._attack_ever_active
+                                    or bool(self.attack_active))
+        if stopped and not self._frozen_taken:
+            self._snapshot_frozen_trigger(both)
+            # 快照里的 PGD 会把梯度累加进被绑定的恶意客户端模型，清掉
+            for client in both:
+                model = getattr(client, "local_model", None)
+                if model is not None:
+                    model.zero_grad(set_to_none=True)
+        if not self._frozen_taken:
+            return {}
+        return {int(c.cid): self._paper_asr_frozen(c.local_model, int(c.cid))
+                for c in both}
+
     def _evaluate_model(self, model: Any) -> Dict[str, float]:
         from .exp_e import _metrics, _predict, evaluate_mode
 
@@ -468,6 +554,18 @@ class TrainingTracker:
         asr_paper_malicious = _paper_mean(malicious_cids)
         asr_paper_all = _paper_mean(benign_cids + malicious_cids)
 
+        # --- B 线：冻结触发器 ASR（停攻点快照后才有值） ---
+        frozen_by_cid = self._maybe_frozen_asr(eval_clients, malicious_clients)
+
+        def _frozen_mean(cids: Sequence[int]) -> float:
+            values = [frozen_by_cid[i] for i in cids
+                      if np.isfinite(frozen_by_cid.get(i, float("nan")))]
+            return float(np.mean(values)) if values else float("nan")
+
+        asr_paper_frozen_benign = _frozen_mean(benign_cids)
+        asr_paper_frozen_malicious = _frozen_mean(malicious_cids)
+        asr_paper_frozen_all = _frozen_mean(benign_cids + malicious_cids)
+
         # --- 逐 edge 的行 ---
         # 本仓库是扁平 FL，没有中间聚合层，所以 "edge" 就是客户端。真有层级
         # 结构时这里要多一列 edge_id，均值也要改成先组内再组间。
@@ -485,6 +583,8 @@ class TrainingTracker:
                 "asr_targeted": row["asr_targeted"],
                 "asr_unfiltered": row["asr_unfiltered"],
                 "asr_paper": paper_by_cid.get(int(client.cid), float("nan")),
+                "asr_paper_frozen": frozen_by_cid.get(int(client.cid),
+                                                      float("nan")),
             })
 
         # MTA 供 after_mta 调度读取。**只有评估过的轮次才更新** ——
@@ -510,6 +610,10 @@ class TrainingTracker:
             "asr_paper_benign": asr_paper_benign,
             "asr_paper_malicious": asr_paper_malicious,
             "asr_paper_all": asr_paper_all,
+            # B 线：冻结触发器 ASR（停攻前 / 未开该模式为 nan）
+            "asr_paper_frozen_benign": asr_paper_frozen_benign,
+            "asr_paper_frozen_malicious": asr_paper_frozen_malicious,
+            "asr_paper_frozen_all": asr_paper_frozen_all,
             # 主任务指标。mta 是**全部样本**上的准确率，acc_personalized 是
             # 非目标类样本上的（与 ASR 的分母同口径）—— 两者不是同一个数。
             "mta_personalized": _mean("mta"),

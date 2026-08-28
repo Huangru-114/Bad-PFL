@@ -198,6 +198,8 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                 f"persistence 攻击窗口 [{a_start},{a_start + a_len}) 超出 "
                 f"total_round={total} —— 停攻后就没有干净轮次可观察衰减了")
         for seed in seeds:
+            # A/B 线：δ 停攻即冻结（默认门控），并开 --freeze-trigger-eval 另存
+            # 冻结触发器 ASR（asr_paper_frozen_*）。一个 run 同时给出 A 和 B。
             tag = _tag("e1b_persist", s=seed)
             cmd = _base_command(exp1, seed, alpha, instrument_root,
                                 results_dir, ckpt_root, total_round=total)
@@ -206,12 +208,30 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                     "--attack-schedule", "burst",
                     "--attack-start", str(a_start),
                     "--attack-length", str(a_len),
+                    "--freeze-trigger-eval",
                     "--run-tag", tag]
             jobs.append({"tag": tag, "stage": "persist", "cmd": cmd,
-                         "describe": (f"implant-then-clean: attack "
-                                      f"[{a_start},{a_start + a_len}) of "
-                                      f"{total} rounds"),
+                         "describe": (f"A/B: attack [{a_start},{a_start + a_len})"
+                                      f" of {total} rounds, delta frozen after"),
                          "csv": implantation_csv(results_dir, alpha, seed, tag)})
+
+            # C 线（上界对照）：投毒仍只在 [a_start, a_start+a_len)，但生成器从
+            # a_start 起一直在线更新 —— 与 A 只在衰减段不同。
+            tag_c = _tag("e1b_persist_online", s=seed)
+            cmd_c = _base_command(exp1, seed, alpha, instrument_root,
+                                  results_dir, ckpt_root, total_round=total)
+            cmd_c += ["--bad-client-num", str(bad),
+                      "--poison-rate", str(rate),
+                      "--attack-schedule", "burst",
+                      "--attack-start", str(a_start),
+                      "--attack-length", str(a_len),
+                      "--generator-online-from", str(a_start),
+                      "--run-tag", tag_c]
+            jobs.append({"tag": tag_c, "stage": "persist", "cmd": cmd_c,
+                         "describe": (f"C: same but generator stays online from "
+                                      f"round {a_start} (upper bound)"),
+                         "csv": implantation_csv(results_dir, alpha, seed,
+                                                 tag_c)})
     return jobs
 
 

@@ -13,10 +13,10 @@ import numpy as np
 import pandas as pd
 
 from diag.analysis_exp1 import (crossing_table, dose_response, load_runs,
-                                onset_analysis, persistence_table, plot_e1_1,
-                                plot_e1_2, plot_e1_4, plot_e1_5, plot_e1b_1,
-                                plot_e1b_2, resolve_asr_column,
-                                threshold_verdict)
+                                onset_analysis, persistence_curves,
+                                persistence_table, plot_e1_1, plot_e1_2,
+                                plot_e1_4, plot_e1_5, plot_e1b_1, plot_e1b_2,
+                                resolve_asr_column, threshold_verdict)
 
 
 def _run(run_id, *, bad=4, rho=0.5, seed=0, schedule="continuous",
@@ -230,6 +230,58 @@ def test_dose_response_skips_runs_shorter_than_the_tail():
     frame = _run("a", rounds=[10], asr=np.array([0.5]), mta=np.array([0.5]),
                  active=[True])
     assert dose_response(frame, tail=5).empty
+
+
+# ---------------------------------------------------------------------------
+# B2 三条线（触发器冻结程度）
+# ---------------------------------------------------------------------------
+def _persist_frame():
+    rounds = [190, 195, 200, 205, 210]
+    active = [True, True, False, False, False]     # 第 200 轮停攻
+    frozen = pd.DataFrame({
+        "run_id": "fedavg_attack_a0.5_s0_e1b_persist_s0", "seed": 0,
+        "round": rounds, "attack_active_this_round": active,
+        "asr_paper_all": [0.9, 0.92, 0.9, 0.6, 0.4],
+        "asr_paper_frozen_all": [np.nan, np.nan, 0.9, 0.7, 0.5],
+    })
+    online = pd.DataFrame({
+        "run_id": "fedavg_attack_a0.5_s0_e1b_persist_online_s0", "seed": 0,
+        "round": rounds, "attack_active_this_round": active,
+        "asr_paper_all": [0.9, 0.92, 0.9, 0.85, 0.8],
+        "asr_paper_frozen_all": np.nan,
+    })
+    return pd.concat([frozen, online], ignore_index=True)
+
+
+def test_persistence_curves_emits_three_aligned_lines():
+    curves = persistence_curves(_persist_frame())
+    labels = set(curves["label"])
+    assert labels == {"A: frozen delta + online xi",
+                      "B: fully frozen trigger",
+                      "C: online delta + online xi"}
+    # 三条都在停攻点 k=0 对齐，A/B 在 k=0 重合（快照当轮 frozen==online）
+    at0 = curves[curves["rounds_since_attack_stopped"] == 0]
+    assert set(at0["asr"]) == {0.9}
+    # 停后 A 掉到 0.4、B 到 0.5、C 到 0.8（在线 δ 撑得最高）
+    def _tail(label):
+        row = curves[(curves["label"] == label)
+                     & (curves["rounds_since_attack_stopped"] == 10)]
+        return float(row["asr"].iloc[0])
+    assert _tail("A: frozen delta + online xi") == 0.4
+    assert _tail("C: online delta + online xi") == 0.8
+
+
+def test_plot_e1b_2_renders_three_line_persistence():
+    import tempfile
+    from pathlib import Path
+    curves = persistence_curves(_persist_frame())
+    with tempfile.TemporaryDirectory() as tmp:
+        assert plot_e1b_2(curves, Path(tmp) / "b2_abc.png").exists()
+
+
+def test_persistence_curves_empty_without_persist_runs():
+    frame = _run("x")                       # 普通 run，run_id 不含 persist
+    assert persistence_curves(frame).empty
 
 
 # ---------------------------------------------------------------------------

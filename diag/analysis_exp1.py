@@ -48,6 +48,7 @@ from .analysis import assert_no_cjk_in_figure
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
            "onset_analysis", "dose_response", "persistence_table",
+           "persistence_curves",
            "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5",
            "plot_e1b_1", "plot_e1b_2", "main"]
 
@@ -298,6 +299,59 @@ def persistence_table(frame: pd.DataFrame) -> pd.DataFrame:
                 "mta": float(row[MTA_COLUMN]),
                 "asr_at_stop": asr_at_stop,
             })
+    return pd.DataFrame(rows)
+
+
+def persistence_curves(frame: pd.DataFrame) -> pd.DataFrame:
+    """B2 的三条曲线（触发器冻结程度对比），从 persist 长跑里抽出。
+
+    - **A**：冻结 δ + 在线 ξ（= Bad-PFL 部署触发器，`asr_paper_all`）。
+    - **B**：完全冻结触发器（停攻点快照，`asr_paper_frozen_all`）—— 纯权重驻留。
+    - **C**：在线 δ + 在线 ξ（`persist_online` 跑的 `asr_paper_all`）—— 上界对照。
+
+    三条都在**真正的停攻点**（第一个"曾攻击过之后转为不攻击"的评估行）对齐 k=0,
+    这样 A/B 在 k=0 重合（快照当轮 frozen==online）。返回长表：
+    ``run_id, seed, label, rounds_since_attack_stopped, asr, asr_at_stop``。
+    """
+    persist = frame[frame["run_id"].str.contains("persist", na=False)]
+    if persist.empty or "attack_active_this_round" not in persist.columns:
+        return pd.DataFrame()
+    online = persist[persist["run_id"].str.contains("persist_online", na=False)]
+    frozen = persist[~persist["run_id"].str.contains("persist_online", na=False)]
+
+    specs: List[Tuple[pd.DataFrame, str, str]] = []
+    if not frozen.empty:
+        specs.append((frozen, "asr_paper_all", "A: frozen delta + online xi"))
+        if "asr_paper_frozen_all" in frozen.columns:
+            specs.append((frozen, "asr_paper_frozen_all",
+                          "B: fully frozen trigger"))
+    if not online.empty:
+        specs.append((online, "asr_paper_all", "C: online delta + online xi"))
+
+    rows: List[Dict[str, Any]] = []
+    for sub, col, label in specs:
+        if col not in sub.columns:
+            continue
+        for run_id, group in sub.groupby("run_id"):
+            group = group.sort_values("round").reset_index(drop=True)
+            active = group["attack_active_this_round"].astype(bool).to_numpy()
+            # 停攻点 = 第一个"之前攻击过、本轮不攻击"的评估行
+            stop_idx = next((i for i in range(len(active))
+                             if not active[i] and active[:i].any()), None)
+            if stop_idx is None:
+                continue
+            first = group.iloc[0]
+            base_round = float(group.iloc[stop_idx]["round"])
+            stop_val = float(group.iloc[stop_idx][col])
+            for off in range(stop_idx, len(group)):
+                r = group.iloc[off]
+                rows.append({
+                    "run_id": str(run_id), "seed": int(first["seed"]),
+                    "label": label,
+                    "rounds_since_attack_stopped": int(r["round"] - base_round),
+                    "asr": float(r[col]),
+                    "asr_at_stop": stop_val,
+                })
     return pd.DataFrame(rows)
 
 
@@ -687,8 +741,10 @@ def plot_e1b_2(persistence: pd.DataFrame, out_path,
         axis.set_axis_off()
         return _finish(fig, out_path)
 
-    colors = _level_colors(sorted(kept["schedule"].unique()))
-    for kind, block in kept.groupby("schedule"):
+    # 三条线对比时按 label（A/B/C）分组；退回旧法时按 schedule 分组
+    group_col = "label" if "label" in kept.columns else "schedule"
+    colors = _level_colors(sorted(kept[group_col].unique()))
+    for kind, block in kept.groupby(group_col):
         grouped = block.groupby("rounds_since_attack_stopped")["asr"]
         xs = sorted(grouped.groups)
         ys = [float(grouped.get_group(x).mean()) for x in xs]
@@ -704,16 +760,20 @@ def plot_e1b_2(persistence: pd.DataFrame, out_path,
             axis.axvline(half, color=colors[kind], linestyle=":", linewidth=1.0,
                          alpha=0.7)
     axis.set_xlabel("Rounds since the attack stopped")
-    axis.set_ylabel(f"Backdoor ASR [{ASR_COLUMN}]")
+    axis.set_ylabel("Backdoor ASR")
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
-    axis.legend(fontsize=8, title="schedule (start ASR, half-life)")
+    legend_title = ("trigger-freeze (start ASR, half-life)"
+                    if group_col == "label" else "schedule (start ASR, half-life)")
+    axis.legend(fontsize=8, title=legend_title)
     axis.set_title("E1B-2  How fast does ASR fall once poisoning stops?")
     return _finish(fig, out_path,
-                   "Aligned at the last poisoned round, averaged over seeds.  "
-                   f"Only runs with ASR >= {min_implant:g} at the stop point "
-                   "are shown (others were never implanted).  Dotted vertical "
-                   "line = half-life (first round below half the start ASR).")
+                   "Aligned at the stop round, averaged over seeds.  Only runs "
+                   f"with ASR >= {min_implant:g} at the stop point are shown.  "
+                   "Dotted line = half-life (first round below half the start "
+                   "ASR).  A/B/C = frozen-delta+online-xi / fully-frozen "
+                   "trigger / online-delta (upper bound); A-vs-B gap = how much "
+                   "ASR rides on online xi vs weight residency.")
 
 
 # ---------------------------------------------------------------------------
@@ -769,12 +829,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     response.to_csv(f"{prefix}_dose_response.csv", index=False)
     onset = onset_analysis(core)
     onset.to_csv(f"{prefix}_onset.csv", index=False)
-    # B2 优先用专用的持续性长跑（攻击到高位再纯干净训练）。没有它时退回旧法
-    # （1B 里停过攻的 early/burst），但那些停得早、未必到高位。
+    # B2 优先用专用的持续性长跑：三条线（A 冻结 δ+在线 ξ / B 完全冻结触发器 /
+    # C 在线 δ 上界）。没有它时退回旧法（1B 里停过攻的 early/burst）。
     if not persist_runs.empty:
-        persistence = persistence_table(persist_runs)
+        persistence = persistence_curves(persist_runs)
+        n_labels = persistence["label"].nunique() if not persistence.empty else 0
         print(f"[analysis_exp1] B2 用专用持续性长跑："
-              f"{persist_runs['run_id'].nunique()} 个 run")
+              f"{persist_runs['run_id'].nunique()} 个 run，{n_labels} 条对比线")
     else:
         persistence = persistence_table(restrict_to_common_dose(frame)[0])
         print("[analysis_exp1] ⚠️ 没找到 persist 长跑，B2 退回 early/burst"
