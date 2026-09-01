@@ -402,6 +402,24 @@ B2 问的是"植入到高位后，停攻多久 ASR 从高位掉下来"。但 Bad
 - run_fl 的 `--generator-online-from` / `--freeze-trigger-eval` 只在 persist 跑开，
   普通 24 格扫描零开销。
 
+### 埋点 14. 更符合社区惯例的 ASR（受害者作用域 + target-排除）
+
+`asr_paper_all` 把攻击者自身（ASR≈1.0）也平均进去，N_m 越大均值越被机械抬高。
+两处应对，**都不重训**：
+
+- **免费（重读 CSV）**：`analysis_exp1` 单列图默认口径从 `asr_paper_all` 改为
+  `asr_paper_benign`（只对良性客户端求均值）；新增 `dose_response_tiers` +
+  `plot_e1_6`（E1-6）把 benign/all/malicious 三档并列，摊开平均伪影。三者仍是
+  unfiltered（含目标类）。
+- **离线重算（`diag/recompute_asr_final.py`，仅最终轮）**：最终 `save_run` 存了全部
+  40 个客户端模型 + 生成器 + `meta.json` 的 per-client `test_indices`，故可离线前向
+  重算 **target-排除** 的原始触发器 ASR。触发器逐字复刻 `fba.our_poison_func`
+  （`fba.pgd_attack(model,x,y) + generator(x)/255*4`，无末端 clamp），在各客户端自己
+  的 test 分区上评估。同时输出 unfiltered 列作**自检**：应与该 run 最终轮 CSV 的
+  `asr_paper_*` 吻合，吻合后 filtered 才可信。复用 `hooks.load_client_model`、
+  `represent.py` 的生成器重载模式、`resnet.get_resnet`。逐轮 filtered 曲线需重训，
+  不做。
+
 ### 埋点 11. Gram 原语的去重
 
 `gram_matrix` / `pairwise_cosine` / `pairwise_distance` / `pseudo_grad_stack`
