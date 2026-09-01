@@ -7,6 +7,7 @@ E1-1    ASR vs round，每个剂量一条跨 seed 均值线                后�
 E1-2    ASR vs MTA 散点（色=剂量, marker=seed）                MTA* 存在吗
 E1-4    剂量-响应：各子图只动一个变量（真单轴扫描）             有效边界在哪
 E1-5    剂量-响应热力图（N_m × ρ_p 的最终 ASR）                有效边界的形状（全网格）
+E1-6    三档 ASR 并列（benign/all/malicious）vs N_m           asr_paper_all 的平均伪影
 E1B-1   各调度的 ASR_t，投毒轮次加底色                          时间结构的影响
 E1B-2   植入到高位后停攻，ASR 多久从高位掉下来（半衰期）        后门自持多久（需 persist 长跑）
 ======  ==================================================  ================
@@ -47,9 +48,9 @@ from .analysis import assert_no_cjk_in_figure
 
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
-           "onset_analysis", "dose_response", "persistence_table",
-           "persistence_curves",
-           "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5",
+           "onset_analysis", "dose_response", "dose_response_tiers",
+           "persistence_table", "persistence_curves",
+           "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5", "plot_e1_6",
            "plot_e1b_1", "plot_e1b_2", "main"]
 
 ASR_COLUMN = "asr_personalized_targeted"
@@ -373,6 +374,41 @@ def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+TIER_COLUMNS = ("asr_paper_benign", "asr_paper_all", "asr_paper_malicious")
+
+
+def dose_response_tiers(frame: pd.DataFrame,
+                        cols: Sequence[str] = TIER_COLUMNS,
+                        tail: int = 3) -> pd.DataFrame:
+    """三档 ASR 的尾均剂量-响应长表：``(bad_client_num, poison_rate, seed, tier, asr)``。
+
+    把 `asr_paper_all` 会随 N_m 机械抬高这件事显式画出来 —— ``all`` 是 ``benign``
+    与 ``malicious``（≈1.0）按客户端数加权的平均，N_m 越大 malicious 权重越大。
+    缺失或整列 nan 的档位**跳过**（留空，不用 0 填），符合"无定义留空"铁律。
+    ``tier`` 用短名 benign/all/malicious。
+    """
+    short = {"asr_paper_benign": "benign", "asr_paper_all": "all",
+             "asr_paper_malicious": "malicious"}
+    present = [c for c in cols
+               if c in frame.columns and bool(np.isfinite(frame[c]).any())]
+    rows: List[Dict[str, Any]] = []
+    for keys, group in frame.groupby(["bad_client_num", "poison_rate", "seed"]):
+        group = group.sort_values("round")
+        if len(group) < tail:
+            continue
+        block = group.iloc[-tail:]
+        for col in present:
+            value = float(block[col].mean())
+            if not np.isfinite(value):
+                continue
+            rows.append({
+                "bad_client_num": int(keys[0]),
+                "poison_rate": float(keys[1]), "seed": int(keys[2]),
+                "tier": short.get(col, col), "asr": value,
+            })
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # 图
 # ---------------------------------------------------------------------------
@@ -648,6 +684,51 @@ def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
                    "grid fills them).")
 
 
+def plot_e1_6(tiers: pd.DataFrame, out_path) -> Path:
+    """E1-6：三档 ASR 并列（benign / all / malicious）vs N_m，按 ρ 分面。
+
+    把 `asr_paper_all` 的平均伪影摊开：``all`` 介于 ``benign``（受害者传递）与
+    ``malicious``（攻击者自身 ≈1.0）之间，且随 N_m 增大越靠近 malicious —— 因为
+    均值里 malicious 的客户端占比在涨，不是攻击对受害者更有效。
+    """
+    fig, axis = None, None
+    if tiers.empty:
+        fig, axis = plt.subplots(figsize=(6.0, 3.5))
+        axis.text(0.5, 0.5, "no tier columns (asr_paper_*) in the data",
+                  ha="center", va="center", transform=axis.transAxes)
+        axis.set_axis_off()
+        return _finish(fig, out_path)
+
+    rhos = sorted(tiers["poison_rate"].unique())
+    colors = _level_colors(sorted(tiers["tier"].unique()))
+    fig, axes = _facet_grid("poison_rate")(len(rhos))
+    for ax, rho in zip(axes, rhos):
+        block = tiers[tiers["poison_rate"] == rho]
+        for tier in sorted(block["tier"].unique()):
+            sub = block[block["tier"] == tier]
+            grouped = sub.groupby("bad_client_num")["asr"].mean().sort_index()
+            ax.plot(grouped.index.to_numpy(dtype=float),
+                    grouped.to_numpy(dtype=float), marker="o", markersize=4,
+                    linewidth=1.8, color=colors[tier], label=str(tier))
+        ax.set_xscale("log", base=2)          # N_m 是 1,2,4,8,16,32
+        ax.set_title(f"rho={rho:g}", fontsize=9)
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(alpha=0.3)
+    for ax in axes[len(rhos):]:
+        ax.set_axis_off()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=8, loc="center right", title="ASR scope")
+    _fig_axis_labels(fig, "Number of malicious clients Nm",
+                     "Backdoor ASR (tail mean)")
+    fig.suptitle("E1-6  ASR by scope: benign (victims) vs all vs malicious")
+    return _finish(fig, out_path,
+                   "'all' = mean over the benign eval subset + the malicious "
+                   "clients (own models ~1.0); it rises with Nm mainly because "
+                   "the malicious fraction grows.\n'benign' is the honest "
+                   "victim-transfer ASR.  All still unfiltered (target class "
+                   "included).")
+
+
 def restrict_to_common_dose(frame: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     """把 1B 的对比限制在**同一个剂量**上。
 
@@ -792,12 +873,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--level", type=float, default=0.5,
                         help="判定'后门已植入'的 ASR 水平")
     parser.add_argument("--tail", type=int, default=3)
-    parser.add_argument("--asr-column", default="asr_paper_all",
-                        help="用哪一列当 ASR。默认 asr_paper_all —— 论文口径"
-                             "（原始触发器 + 各客户端自己 test loader，全体均值，"
-                             "对齐 main.py 的 Avg ASR）。可选 asr_paper_benign / "
-                             "asr_paper_malicious，或旧口径 asr_personalized_targeted"
-                             "（perturb 分解，仅良性）。缺列时自动回退到旧口径。")
+    parser.add_argument("--asr-column", default="asr_paper_benign",
+                        help="单列图用哪一列当 ASR。默认 asr_paper_benign —— "
+                             "受害者作用域（只对良性客户端求均值，排除攻击者自身 "
+                             "≈1.0），是'后门是否传到受害者'的诚实口径。可选 "
+                             "asr_paper_all（含攻击者，会随 N_m 机械抬高，对齐 "
+                             "main.py 的 Avg ASR）/ asr_paper_malicious，或旧口径 "
+                             "asr_personalized_targeted。缺列时自动回退。三档并列见 "
+                             "E1-6。注意：均为 unfiltered（含目标类）；target-排除的"
+                             "精确口径要用 diag.recompute_asr_final（最终轮）。")
     args = parser.parse_args(argv)
 
     frame = load_runs(args.implantation_glob)
@@ -889,6 +973,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not response.empty:
         figures.append(plot_e1_4(response, out_dir / "exp1_E4_dose_response.png"))
         figures.append(plot_e1_5(response, out_dir / "exp1_E5_dose_heatmap.png"))
+    # E1-6：三档 ASR 并列（把 asr_paper_all 的平均伪影摊开）
+    tiers = dose_response_tiers(core, tail=args.tail)
+    tiers.to_csv(f"{prefix}_asr_tiers.csv", index=False)
+    figures.append(plot_e1_6(tiers, out_dir / "exp1_E6_asr_tiers.png"))
     if stage1b["schedule"].nunique() > 1:
         figures.append(plot_e1b_1(stage1b, out_dir / "exp1b_B1_schedules.png"))
     figures.append(plot_e1b_2(persistence, out_dir / "exp1b_B2_persistence.png"))

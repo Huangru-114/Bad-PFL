@@ -12,10 +12,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from diag.analysis_exp1 import (crossing_table, dose_response, load_runs,
-                                onset_analysis, persistence_curves,
-                                persistence_table, plot_e1_1, plot_e1_2,
-                                plot_e1_4, plot_e1_5, plot_e1b_1, plot_e1b_2,
+from diag.analysis_exp1 import (crossing_table, dose_response,
+                                dose_response_tiers, load_runs, onset_analysis,
+                                persistence_curves, persistence_table,
+                                plot_e1_1, plot_e1_2, plot_e1_4, plot_e1_5,
+                                plot_e1_6, plot_e1b_1, plot_e1b_2,
                                 resolve_asr_column, threshold_verdict)
 
 
@@ -282,6 +283,48 @@ def test_plot_e1b_2_renders_three_line_persistence():
 def test_persistence_curves_empty_without_persist_runs():
     frame = _run("x")                       # 普通 run，run_id 不含 persist
     assert persistence_curves(frame).empty
+
+
+# ---------------------------------------------------------------------------
+# 三档 ASR（benign / all / malicious）
+# ---------------------------------------------------------------------------
+def _tiers_frame():
+    frames = []
+    for bad in (1, 4, 32):
+        for seed in (0,):
+            f = _run(f"nm{bad}", bad=bad, rho=0.1, seed=seed, rounds=[190, 195, 200])
+            # benign 随 N_m 略升；all 随 N_m 明显升（malicious 权重变大）；mal≈1.0
+            f["asr_paper_benign"] = {1: 0.2, 4: 0.3, 32: 0.35}[bad]
+            f["asr_paper_all"] = {1: 0.27, 4: 0.55, 32: 0.9}[bad]
+            f["asr_paper_malicious"] = 0.99
+            frames.append(f)
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_dose_response_tiers_emits_three_tiers_with_tail_means():
+    tiers = dose_response_tiers(_tiers_frame(), tail=3)
+    assert set(tiers["tier"]) == {"benign", "all", "malicious"}
+    row = tiers[(tiers.tier == "all") & (tiers.bad_client_num == 32)]
+    assert abs(float(row["asr"].iloc[0]) - 0.9) < 1e-6
+    b = tiers[(tiers.tier == "benign") & (tiers.bad_client_num == 32)]
+    assert abs(float(b["asr"].iloc[0]) - 0.35) < 1e-6
+
+
+def test_dose_response_tiers_skips_missing_columns():
+    frame = _tiers_frame().drop(columns=["asr_paper_malicious"])
+    tiers = dose_response_tiers(frame, tail=3)
+    assert set(tiers["tier"]) == {"benign", "all"}   # 缺的档位跳过，不补 0
+
+
+def test_plot_e1_6_renders():
+    import tempfile
+    from pathlib import Path
+    tiers = dose_response_tiers(_tiers_frame(), tail=3)
+    with tempfile.TemporaryDirectory() as tmp:
+        assert plot_e1_6(tiers, Path(tmp) / "e6.png").exists()
+        # 空表也要出图（写明原因），不抛异常
+        assert plot_e1_6(dose_response_tiers(_run("x"), tail=3),
+                         Path(tmp) / "e6empty.png").exists()
 
 
 # ---------------------------------------------------------------------------

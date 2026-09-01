@@ -67,7 +67,7 @@
 | `run_density_sweep.py` | 恶意密度扫描的命令生成器（**默认 dry-run**） | `build_commands`, `expected_gap` | CLI |
 | `schedule.py` | 攻击调度（实验 1B）：六种时间结构 + 门控 | `AttackSchedule`, `gate_attack`, `SCHEDULES` | `run_fl` |
 | `run_exp1.py` | 实验 1/1B 的命令生成器（**默认 dry-run**，十字扫描） | `dose_points`, `build_commands`, `estimate_cost` | CLI |
-| `analysis_exp1.py` | 实验 1/1B 的六张图（含剂量热力图 E1-5）+ 阈值判据（含零假设） | `crossing_table`, `threshold_verdict`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
+| `analysis_exp1.py` | 实验 1/1B 的图（含热力图 E1-5、三档 ASR 并列 E1-6）+ 阈值判据 | `crossing_table`, `threshold_verdict`, `dose_response_tiers`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
 | `represent.py` | 表征指标（从 checkpoint **离线**算） | `embed`, `representation_row`, `representation_table` | CLI |
 
 ### 测试
@@ -408,12 +408,15 @@ python -m diag.analysis_exp1 \
 是 100 客户端 / ResNet-10 / 1000 轮。**此前所有 I/J 的数字都不再可比**，
 不要把两批结果画在同一张图上。
 
-⚠️ **exp1 的 ASR 用论文口径**（埋点 12）：`analysis_exp1` 默认读 `asr_paper_all`
-——原始 `full_poison_func`、各客户端自己的 test loader、不过滤目标类，对齐
-`main.py` 的 "Avg ASR"。旧 CSV（无 `asr_paper_*` 列）会**自动回退**到
-`asr_personalized_targeted`（perturb 分解口径，仅良性，**会严重低估**良性 ASR，
-见 HANDOFF §5b）并告警——那种情形要**重跑** exp1 才有论文口径。
-`--asr-column` 可选 `asr_paper_benign` / `asr_paper_malicious`。
+⚠️ **exp1 的 ASR 口径**（埋点 12/14）：`analysis_exp1` 单列图**默认读
+`asr_paper_benign`**——只对良性客户端（受害者）求均值，是"后门是否传到受害者"的
+诚实口径。`asr_paper_all`（含攻击者自身 ≈1.0）会随 `N_m` **机械抬高**（N_m 越大
+均值里 malicious 权重越大），只作对照，见 **E1-6 三档并列图**（benign/all/malicious）。
+三者都用原始 `full_poison_func`、各客户端自己的 test loader，但都是 **unfiltered**
+（含目标类）。旧 CSV（无 `asr_paper_*` 列）自动回退 `asr_personalized_targeted`
+并告警。`--asr-column` 可取 `asr_paper_all` / `asr_paper_malicious`。
+**target-排除的精确社区口径**（最终轮）用 `python -m diag.recompute_asr_final`
+从最终 checkpoint 离线重算，不重训。
 
 #### 扫描是十字形的，不是全因子
 
