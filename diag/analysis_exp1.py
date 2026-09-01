@@ -303,12 +303,17 @@ def persistence_table(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def persistence_curves(frame: pd.DataFrame) -> pd.DataFrame:
+def persistence_curves(frame: pd.DataFrame,
+                       scope: str = "benign") -> pd.DataFrame:
     """B2 的三条曲线（触发器冻结程度对比），从 persist 长跑里抽出。
 
-    - **A**：冻结 δ + 在线 ξ（= Bad-PFL 部署触发器，`asr_paper_all`）。
-    - **B**：完全冻结触发器（停攻点快照，`asr_paper_frozen_all`）—— 纯权重驻留。
-    - **C**：在线 δ + 在线 ξ（`persist_online` 跑的 `asr_paper_all`）—— 上界对照。
+    ``scope`` ∈ {benign, all, malicious}：用哪一档作用域的 ASR。**默认 benign**
+    （受害者视角，与 E1/E1B-1 一致）—— `asr_paper_all` 会把攻击者自身 ≈1.0 平均
+    进去、抬高绝对水平并混入攻击者自己的衰减，不是"受害者遗忘曲线"。
+
+    - **A**：冻结 δ + 在线 ξ（= Bad-PFL 部署触发器，`asr_paper_<scope>`）。
+    - **B**：完全冻结触发器（停攻点快照，`asr_paper_frozen_<scope>`）—— 纯权重驻留。
+    - **C**：在线 δ + 在线 ξ（`persist_online` 跑）—— 上界对照。
 
     三条都在**真正的停攻点**（第一个"曾攻击过之后转为不攻击"的评估行）对齐 k=0,
     这样 A/B 在 k=0 重合（快照当轮 frozen==online）。返回长表：
@@ -320,14 +325,17 @@ def persistence_curves(frame: pd.DataFrame) -> pd.DataFrame:
     online = persist[persist["run_id"].str.contains("persist_online", na=False)]
     frozen = persist[~persist["run_id"].str.contains("persist_online", na=False)]
 
+    live_col = f"asr_paper_{scope}"            # A / C：在线 ξ
+    frozen_col = f"asr_paper_frozen_{scope}"   # B：冻结触发器
+    tag = "" if scope == "benign" else f" [{scope}]"
     specs: List[Tuple[pd.DataFrame, str, str]] = []
     if not frozen.empty:
-        specs.append((frozen, "asr_paper_all", "A: frozen delta + online xi"))
-        if "asr_paper_frozen_all" in frozen.columns:
-            specs.append((frozen, "asr_paper_frozen_all",
-                          "B: fully frozen trigger"))
+        specs.append((frozen, live_col, f"A: frozen delta + online xi{tag}"))
+        if frozen_col in frozen.columns:
+            specs.append((frozen, frozen_col,
+                          f"B: fully frozen trigger{tag}"))
     if not online.empty:
-        specs.append((online, "asr_paper_all", "C: online delta + online xi"))
+        specs.append((online, live_col, f"C: online delta + online xi{tag}"))
 
     rows: List[Dict[str, Any]] = []
     for sub, col, label in specs:
@@ -635,7 +643,7 @@ def plot_e1_4(response: pd.DataFrame, out_path) -> Path:
         axis.set_ylim(0.0, 1.0)
         axis.grid(alpha=0.3)
     left.set_ylabel("Backdoor ASR (tail mean)")
-    fig.suptitle("E1-4  Dose-response along each single axis")
+    fig.suptitle(f"E1-4  Dose-response along each single axis  [{ASR_COLUMN}]")
     return _finish(fig, out_path,
                    "Each panel holds the other variable fixed at the cross "
                    "centre, so it is a true single-axis sweep.  Grey dots are "
@@ -676,7 +684,8 @@ def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
             else:
                 axis.text(j, i, "-", ha="center", va="center", fontsize=8,
                           color="0.6")
-    fig.colorbar(mesh, ax=axis, label="Backdoor ASR (tail mean)", shrink=0.85)
+    fig.colorbar(mesh, ax=axis, label=f"Backdoor ASR [{ASR_COLUMN}] (tail mean)",
+                 shrink=0.85)
     axis.set_title("E1-5  Dose-response surface (ASR over the Nm x rho grid)")
     return _finish(fig, out_path,
                    "Cells are the tail-mean ASR averaged over seeds.  Blank/'-' "

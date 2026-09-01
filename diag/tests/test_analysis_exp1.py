@@ -239,17 +239,18 @@ def test_dose_response_skips_runs_shorter_than_the_tail():
 def _persist_frame():
     rounds = [190, 195, 200, 205, 210]
     active = [True, True, False, False, False]     # 第 200 轮停攻
+    # 默认 scope=benign，所以 fixture 用 benign 列
     frozen = pd.DataFrame({
         "run_id": "fedavg_attack_a0.5_s0_e1b_persist_s0", "seed": 0,
         "round": rounds, "attack_active_this_round": active,
-        "asr_paper_all": [0.9, 0.92, 0.9, 0.6, 0.4],
-        "asr_paper_frozen_all": [np.nan, np.nan, 0.9, 0.7, 0.5],
+        "asr_paper_benign": [0.9, 0.92, 0.9, 0.6, 0.4],
+        "asr_paper_frozen_benign": [np.nan, np.nan, 0.9, 0.7, 0.5],
     })
     online = pd.DataFrame({
         "run_id": "fedavg_attack_a0.5_s0_e1b_persist_online_s0", "seed": 0,
         "round": rounds, "attack_active_this_round": active,
-        "asr_paper_all": [0.9, 0.92, 0.9, 0.85, 0.8],
-        "asr_paper_frozen_all": np.nan,
+        "asr_paper_benign": [0.9, 0.92, 0.9, 0.85, 0.8],
+        "asr_paper_frozen_benign": np.nan,
     })
     return pd.concat([frozen, online], ignore_index=True)
 
