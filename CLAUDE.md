@@ -2,6 +2,7 @@
 
 这是一个基于**因果不变性的联邦后门防御**研究项目，针对 Bad-PFL（ICLR 2025）。
 所有诊断代码在 `diag/` 下。**先读 `diag/HANDOFF.md`** 了解当前研究状态与下一步。
+**当前在做的实验看 `diag/PLAN_T0T4.md`**（地板 0.41 的机制：休眠容量 / 共址 / 函数平坦 三选一）。
 
 ## 铁律（违反会毁掉结果的可比性或可信度）
 
@@ -35,7 +36,9 @@
 
 ## 分支与提交
 
-- 开发分支：`claude/bad-pfl-trigger-invariance-ucvpcp`（除非另有说明）。
+- 开发分支：**`claude/bad-pfl-exp-1-nafj1i`**（2026-09-02 起）。它是
+  `claude/bad-pfl-trigger-invariance-ucvpcp` 的**严格超集**（merge-base 就是后者的 HEAD），
+  B2 持续性的 config 只在这条上。切错分支会看不到 `exp1.persistence`。
 - 提交信息不含任何模型标识符。
 - 只在用户明确要求时才建 PR。
 

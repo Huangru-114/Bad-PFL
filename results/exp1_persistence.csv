@@ -1,0 +1,124 @@
+run_id,seed,label,rounds_since_attack_stopped,asr,asr_at_stop
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,0,0.6174107142857144,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,5,0.653125,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,10,0.5741071428571429,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,15,0.5089285714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,20,0.525,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,25,0.5196428571428571,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,30,0.3772321428571428,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,35,0.4375,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,40,0.3995535714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,45,0.5035714285714287,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,50,0.4178571428571428,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,55,0.3866071428571428,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,60,0.415625,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,65,0.3584821428571428,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,70,0.3825892857142857,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,75,0.4151785714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,80,0.4316964285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,85,0.4727678571428572,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,90,0.4816964285714286,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,95,0.4058035714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,100,0.3946428571428572,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,105,0.3875,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,110,0.3821428571428572,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,115,0.371875,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,120,0.4464285714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,125,0.415625,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,130,0.321875,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,135,0.3401785714285714,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,140,0.3678571428571429,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,145,0.3816964285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,150,0.3879464285714286,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,155,0.340625,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,160,0.3491071428571428,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,165,0.4223214285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,170,0.4004464285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,175,0.4633928571428571,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,180,0.4383928571428571,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,185,0.4004464285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,190,0.3379464285714285,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,195,0.3549107142857143,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,A: frozen delta + online xi,200,0.3419642857142857,0.6174107142857144
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,0,0.6258928571428571,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,5,0.5830357142857142,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,10,0.5339285714285713,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,15,0.503125,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,20,0.496875,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,25,0.4821428571428572,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,30,0.4,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,35,0.4308035714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,40,0.4241071428571429,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,45,0.4986607142857143,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,50,0.4236607142857143,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,55,0.3924107142857143,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,60,0.4357142857142858,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,65,0.3875,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,70,0.4138392857142857,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,75,0.4236607142857143,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,80,0.4366071428571428,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,85,0.4540178571428572,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,90,0.471875,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,95,0.4125,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,100,0.4058035714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,105,0.3883928571428571,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,110,0.4053571428571428,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,115,0.390625,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,120,0.4589285714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,125,0.4504464285714286,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,130,0.3526785714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,135,0.3678571428571427,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,140,0.4026785714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,145,0.4227678571428571,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,150,0.4111607142857143,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,155,0.3808035714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,160,0.3745535714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,165,0.4477678571428571,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,170,0.4276785714285714,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,175,0.46875,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,180,0.4513392857142858,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,185,0.4223214285714285,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,190,0.3674107142857142,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,195,0.384375,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_s0,0,B: fully frozen trigger,200,0.3794642857142857,0.6258928571428571
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,0,0.6200892857142857,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,5,0.5843750000000001,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,10,0.5678571428571428,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,15,0.5089285714285714,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,20,0.4165178571428572,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,25,0.421875,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,30,0.5267857142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,35,0.4700892857142857,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,40,0.3995535714285714,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,45,0.39375,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,50,0.3111607142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,55,0.35,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,60,0.3763392857142856,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,65,0.3191964285714285,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,70,0.5241071428571429,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,75,0.4303571428571429,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,80,0.4205357142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,85,0.4665178571428571,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,90,0.5133928571428571,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,95,0.4535714285714285,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,100,0.4683035714285714,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,105,0.5544642857142856,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,110,0.515625,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,115,0.5209821428571428,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,120,0.4174107142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,125,0.4794642857142857,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,130,0.4593749999999999,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,135,0.4441964285714285,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,140,0.4665178571428572,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,145,0.4986607142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,150,0.5049107142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,155,0.4915178571428571,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,160,0.4941964285714285,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,165,0.4901785714285714,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,170,0.479017857142857,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,175,0.51875,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,180,0.4522321428571428,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,185,0.4892857142857143,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,190,0.4919642857142857,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,195,0.4808035714285714,0.6200892857142857
+fedavg_attack_a0.5_s0_e1b_persist_online_s0,0,C: online delta + online xi,200,0.4517857142857143,0.6200892857142857
