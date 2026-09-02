@@ -45,6 +45,8 @@ TEST_MODULES = [
     "diag.tests.test_run_exp1",
     "diag.tests.test_recompute_asr_final",
     "diag.tests.test_represent",
+    "diag.tests.test_paramspace",
+    "diag.tests.test_exp_t0",
 ]
 
 
