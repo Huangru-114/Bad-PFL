@@ -1,0 +1,35 @@
+  PASS  test_analysis_exp1::test_1b_figures_hold_the_dose_fixed
+  PASS  test_analysis_exp1::test_all_figures_render_and_pass_the_cjk_scan
+  PASS  test_analysis_exp1::test_crossing_picks_the_first_crossing
+  PASS  test_analysis_exp1::test_dose_response_skips_runs_shorter_than_the_tail
+  PASS  test_analysis_exp1::test_dose_response_tiers_emits_three_tiers_with_tail_means
+  PASS  test_analysis_exp1::test_dose_response_tiers_skips_missing_columns
+  PASS  test_analysis_exp1::test_dose_response_uses_the_tail
+  PASS  test_analysis_exp1::test_load_derives_run_id_from_the_filename
+  PASS  test_analysis_exp1::test_load_rejects_old_csvs_missing_the_dose_columns
+  PASS  test_analysis_exp1::test_onset_reports_the_mta_at_the_first_poisoned_round
+  PASS  test_analysis_exp1::test_persistence_aligns_at_the_last_poisoned_round
+  PASS  test_analysis_exp1::test_persistence_curves_emits_three_aligned_lines
+  PASS  test_analysis_exp1::test_persistence_curves_empty_without_persist_runs
+  PASS  test_analysis_exp1::test_persistence_excludes_runs_that_never_stopped
+  PASS  test_analysis_exp1::test_persistence_skips_runs_that_never_attacked
+  PASS  test_analysis_exp1::test_plot_e1_6_renders
+  PASS  test_analysis_exp1::test_plot_e1b_2_renders_three_line_persistence
+  PASS  test_analysis_exp1::test_resolve_asr_falls_back_when_paper_column_absent
+  PASS  test_analysis_exp1::test_resolve_asr_falls_back_when_paper_column_all_nan
+  PASS  test_analysis_exp1::test_resolve_asr_prefers_paper_column
+  PASS  test_analysis_exp1::test_resolve_asr_raises_when_no_known_column
+  PASS  test_analysis_exp1::test_restrict_is_a_noop_without_other_schedules
+  PASS  test_analysis_exp1::test_runs_that_never_cross_stay_in_the_table
+  PASS  test_analysis_exp1::test_saturating_mta_alone_does_not_count_as_a_threshold
+  PASS  test_analysis_exp1::test_schedule_figures_handle_the_degenerate_cases
+  PASS  test_analysis_exp1::test_verdict_detects_a_tight_mta_threshold
+  PASS  test_analysis_exp1::test_verdict_detects_a_time_driven_pattern
+  PASS  test_analysis_exp1::test_verdict_is_undetermined_with_too_few_crossings
+
+28 passed, 0 failed in 6.83s
+  PASS  test_recompute_asr_final::test_aggregate_empty_tier_is_nan_not_zero
+  PASS  test_recompute_asr_final::test_aggregate_ignores_non_finite_values
+  PASS  test_recompute_asr_final::test_aggregate_splits_benign_all_malicious
+
+3 passed, 0 failed in 5.62s

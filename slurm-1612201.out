@@ -1,0 +1,6 @@
+usage: run_exp1.py [-h] [--config CONFIG] [--stage {1,1b,all}]
+                   [--seeds [SEEDS ...]] [--full-grid]
+                   [--instrument-root INSTRUMENT_ROOT]
+                   [--results-dir RESULTS_DIR] [--ckpt-root CKPT_ROOT]
+                   [--execute] [--skip-existing]
+run_exp1.py: error: unrecognized arguments: --model-size 10

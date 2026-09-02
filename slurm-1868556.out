@@ -1,0 +1,187 @@
+  （论文尺：原始触发器 + 各客户端自己 test loader）
+[analysis_exp1] ASR 口径 = asr_paper_benign
+[analysis_exp1] B2 用专用持续性长跑：2 个 run，3 条对比线
+[analysis_exp1] 45 个 run，1880 个评估行
+
+=== ASR >= 0.5 的越过点 ===
+                                        run_id  seed  bad_client_num  poison_rate     schedule  level  crossed  final_asr  round_at_cross  mta_at_cross  loss_at_cross
+       fedavg_attack_a0.5_s0_e1_bad1_rho0p1_s0     0               1         0.10   continuous    0.5    False   0.196875             NaN           NaN            NaN
+      fedavg_attack_a0.5_s0_e1_bad1_rho0p25_s0     0               1         0.25   continuous    0.5    False   0.216964             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad1_rho0p5_s0     0               1         0.50   continuous    0.5    False   0.253571             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1_bad1_rho0p5_s1     1               1         0.50   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad1_rho1p0_s0     0               1         1.00   continuous    0.5    False   0.092857             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad2_rho0p1_s0     0               2         0.10   continuous    0.5    False   0.324554             NaN           NaN            NaN
+      fedavg_attack_a0.5_s0_e1_bad2_rho0p25_s0     0               2         0.25   continuous    0.5    False   0.317857             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad2_rho0p5_s0     0               2         0.50   continuous    0.5    False   0.181696             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1_bad2_rho0p5_s1     1               2         0.50   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad2_rho1p0_s0     0               2         1.00   continuous    0.5    False   0.112500             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad4_rho0p1_s0     0               4         0.10   continuous    0.5     True   0.458482           140.0      0.556650       1.495244
+   fedavg_attack_a0.5_s0_e1b_schedafter_mta_s0     0               4         0.10    after_mta    0.5    False   0.426786             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1b_schedburst_s0     0               4         0.10        burst    0.5    False   0.135714             NaN           NaN            NaN
+  fedavg_attack_a0.5_s0_e1b_schedcontinuous_s0     0               4         0.10   continuous    0.5     True   0.458482           140.0      0.556650       1.495244
+       fedavg_attack_a0.5_s0_e1b_schedearly_s0     0               4         0.10        early    0.5    False   0.117857             NaN           NaN            NaN
+fedavg_attack_a0.5_s0_e1b_schedintermittent_s0     0               4         0.10 intermittent    0.5    False   0.200893             NaN           NaN            NaN
+        fedavg_attack_a0.5_s0_e1b_schedlate_s0     0               4         0.10         late    0.5     True   0.620536           175.0      0.564450       1.602319
+       fedavg_attack_a0.5_s1_e1_bad4_rho0p1_s1     1               4         0.10   continuous    0.5    False        NaN             NaN           NaN            NaN
+      fedavg_attack_a0.5_s0_e1_bad4_rho0p25_s0     0               4         0.25   continuous    0.5     True   0.598661           140.0      0.572400       1.445051
+      fedavg_attack_a0.5_s1_e1_bad4_rho0p25_s1     1               4         0.25   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad4_rho0p5_s0     0               4         0.50   continuous    0.5    False   0.255804             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1_bad4_rho0p5_s1     1               4         0.50   continuous    0.5    False        NaN             NaN           NaN            NaN
+   fedavg_attack_a0.5_s1_e1b_schedafter_mta_s1     1               4         0.50    after_mta    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1b_schedburst_s1     1               4         0.50        burst    0.5    False        NaN             NaN           NaN            NaN
+  fedavg_attack_a0.5_s1_e1b_schedcontinuous_s1     1               4         0.50   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1b_schedearly_s1     1               4         0.50        early    0.5    False        NaN             NaN           NaN            NaN
+fedavg_attack_a0.5_s1_e1b_schedintermittent_s1     1               4         0.50 intermittent    0.5    False        NaN             NaN           NaN            NaN
+        fedavg_attack_a0.5_s1_e1b_schedlate_s1     1               4         0.50         late    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad4_rho1p0_s0     0               4         1.00   continuous    0.5    False   0.143750             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1_bad4_rho1p0_s1     1               4         1.00   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad8_rho0p1_s0     0               8         0.10   continuous    0.5     True   0.688393           120.0      0.515100       2.250702
+      fedavg_attack_a0.5_s0_e1_bad8_rho0p25_s0     0               8         0.25   continuous    0.5     True   0.503125           140.0      0.545950       1.507755
+       fedavg_attack_a0.5_s0_e1_bad8_rho0p5_s0     0               8         0.50   continuous    0.5    False   0.202232             NaN           NaN            NaN
+       fedavg_attack_a0.5_s1_e1_bad8_rho0p5_s1     1               8         0.50   continuous    0.5    False        NaN             NaN           NaN            NaN
+       fedavg_attack_a0.5_s0_e1_bad8_rho1p0_s0     0               8         1.00   continuous    0.5    False   0.075893             NaN           NaN            NaN
+      fedavg_attack_a0.5_s0_e1_bad16_rho0p1_s0     0              16         0.10   continuous    0.5     True   0.871875            65.0      0.431850       1.767006
+     fedavg_attack_a0.5_s0_e1_bad16_rho0p25_s0     0              16         0.25   continuous    0.5     True   0.654911           155.0      0.565250       1.411018
+      fedavg_attack_a0.5_s0_e1_bad16_rho0p5_s0     0              16         0.50   continuous    0.5     True   0.410714           195.0      0.546000       1.659593
+      fedavg_attack_a0.5_s0_e1_bad16_rho1p0_s0     0              16         1.00   continuous    0.5    False   0.059375             NaN           NaN            NaN
+      fedavg_attack_a0.5_s0_e1_bad32_rho0p1_s0     0              32         0.10   continuous    0.5     True   0.321987           145.0      0.549375       1.495843
+     fedavg_attack_a0.5_s0_e1_bad32_rho0p25_s0     0              32         0.25   continuous    0.5     True   0.916853            45.0      0.306250       2.203184
+      fedavg_attack_a0.5_s0_e1_bad32_rho0p5_s0     0              32         0.50   continuous    0.5     True   0.824219           160.0      0.371437       2.095085
+      fedavg_attack_a0.5_s0_e1_bad32_rho1p0_s0     0              32         1.00   continuous    0.5    False   0.045759             NaN           NaN            NaN
+
+=== 阈值判据（相关性证据，**不是因果**）===
+  n_runs                   43
+  n_crossed                12
+  n_never_crossed          31
+  mta_at_cross_mean        0.5068
+  mta_at_cross_std         0.08797
+  round_at_cross_mean      135
+  round_at_cross_std       42.27
+  relative_spread_mta      0.1701
+  relative_spread_round    0.2167
+  未能确定：实测相对离散 0.170 与纯时间驱动的零假设 0.143 相当 —— MTA 看起来集中，只是因为 MTA(t) 在训练后期饱和，并不能说明它带来了轮次之外的信息。要分开必须用 1B 的调度变化。
+
+=== 剂量-响应（尾部 3 个评估行）===
+ bad_client_num  poison_rate  seed      asr      mta  n_tail
+              1         0.10     0 0.241815 0.595233       3
+              1         0.25     0 0.226637 0.592117       3
+              1         0.50     0 0.277232 0.593617       3
+              1         0.50     1      NaN 0.554083       3
+              1         1.00     0 0.146577 0.579983       3
+              2         0.10     0 0.344792 0.558883       3
+              2         0.25     0 0.387649 0.594200       3
+              2         0.50     0 0.192113 0.592117       3
+              2         0.50     1      NaN 0.558000       3
+              2         1.00     0 0.108482 0.540017       3
+              4         0.10     0 0.496131 0.558517       3
+              4         0.10     1      NaN 0.543633       3
+              4         0.25     0 0.592857 0.582550       3
+              4         0.25     1      NaN 0.548683       3
+              4         0.50     0 0.290625 0.561667       3
+              4         0.50     1      NaN 0.563700       3
+              4         1.00     0 0.145982 0.572133       3
+              4         1.00     1      NaN 0.539500       3
+              8         0.10     0 0.688095 0.590950       3
+              8         0.25     0 0.583333 0.577100       3
+              8         0.50     0 0.294196 0.536050       3
+              8         0.50     1      NaN 0.506750       3
+              8         1.00     0 0.125446 0.513267       3
+             16         0.10     0 0.771875 0.538950       3
+             16         0.25     0 0.714732 0.548850       3
+             16         0.50     0 0.423661 0.516800       3
+             16         1.00     0 0.055655 0.429117       3
+             32         0.10     0 0.247768 0.467312       3
+             32         0.25     0 0.914993 0.536271       3
+             32         0.50     0 0.777344 0.467021       3
+             32         1.00     0 0.050781 0.293208       3
+
+=== 1B：起始 MTA vs 最终 ASR（识别策略）===
+                                        run_id  seed     schedule  bad_client_num  poison_rate  mta_at_onset  round_at_onset  n_active_eval_rounds  final_asr  peak_asr
+   fedavg_attack_a0.5_s0_e1b_schedafter_mta_s0     0    after_mta               4         0.10      0.582550           185.0                     4   0.426786  0.426786
+   fedavg_attack_a0.5_s1_e1b_schedafter_mta_s1     1    after_mta               4         0.50           NaN             NaN                     0        NaN       NaN
+       fedavg_attack_a0.5_s0_e1b_schedburst_s0     0        burst               4         0.10      0.316250            40.0                     4   0.135714  0.162946
+       fedavg_attack_a0.5_s1_e1b_schedburst_s1     1        burst               4         0.50      0.308200            40.0                     4        NaN       NaN
+      fedavg_attack_a0.5_s0_e1_bad16_rho0p1_s0     0   continuous              16         0.10      0.106500             5.0                    40   0.871875  0.871875
+     fedavg_attack_a0.5_s0_e1_bad16_rho0p25_s0     0   continuous              16         0.25      0.100450             5.0                    40   0.654911  0.780804
+      fedavg_attack_a0.5_s0_e1_bad16_rho0p5_s0     0   continuous              16         0.50      0.102500             5.0                    40   0.410714  0.501786
+      fedavg_attack_a0.5_s0_e1_bad16_rho1p0_s0     0   continuous              16         1.00      0.102600             5.0                    40   0.059375  0.146429
+       fedavg_attack_a0.5_s0_e1_bad1_rho0p1_s0     0   continuous               1         0.10      0.099450             5.0                    40   0.196875  0.303125
+      fedavg_attack_a0.5_s0_e1_bad1_rho0p25_s0     0   continuous               1         0.25      0.099450             5.0                    40   0.216964  0.258036
+       fedavg_attack_a0.5_s0_e1_bad1_rho0p5_s0     0   continuous               1         0.50      0.099450             5.0                    40   0.253571  0.319643
+       fedavg_attack_a0.5_s0_e1_bad1_rho1p0_s0     0   continuous               1         1.00      0.099450             5.0                    40   0.092857  0.202232
+       fedavg_attack_a0.5_s0_e1_bad2_rho0p1_s0     0   continuous               2         0.10      0.101450             5.0                    40   0.324554  0.463393
+      fedavg_attack_a0.5_s0_e1_bad2_rho0p25_s0     0   continuous               2         0.25      0.106400             5.0                    40   0.317857  0.446429
+       fedavg_attack_a0.5_s0_e1_bad2_rho0p5_s0     0   continuous               2         0.50      0.102200             5.0                    40   0.181696  0.232589
+       fedavg_attack_a0.5_s0_e1_bad2_rho1p0_s0     0   continuous               2         1.00      0.111950             5.0                    40   0.112500  0.211161
+      fedavg_attack_a0.5_s0_e1_bad32_rho0p1_s0     0   continuous              32         0.10      0.103125             5.0                    40   0.321987  0.816964
+     fedavg_attack_a0.5_s0_e1_bad32_rho0p25_s0     0   continuous              32         0.25      0.101688             5.0                    40   0.916853  0.938058
+      fedavg_attack_a0.5_s0_e1_bad32_rho0p5_s0     0   continuous              32         0.50      0.101875             5.0                    40   0.824219  0.824219
+      fedavg_attack_a0.5_s0_e1_bad32_rho1p0_s0     0   continuous              32         1.00      0.104813             5.0                    40   0.045759  0.064732
+       fedavg_attack_a0.5_s0_e1_bad4_rho0p1_s0     0   continuous               4         0.10      0.101450             5.0                    40   0.458482  0.707589
+      fedavg_attack_a0.5_s0_e1_bad4_rho0p25_s0     0   continuous               4         0.25      0.106400             5.0                    40   0.598661  0.622768
+       fedavg_attack_a0.5_s0_e1_bad4_rho0p5_s0     0   continuous               4         0.50      0.102200             5.0                    40   0.255804  0.364286
+       fedavg_attack_a0.5_s0_e1_bad4_rho1p0_s0     0   continuous               4         1.00      0.111950             5.0                    40   0.143750  0.205804
+       fedavg_attack_a0.5_s0_e1_bad8_rho0p1_s0     0   continuous               8         0.10      0.106000             5.0                    40   0.688393  0.847321
+      fedavg_attack_a0.5_s0_e1_bad8_rho0p25_s0     0   continuous               8         0.25      0.110250             5.0                    40   0.503125  0.636607
+       fedavg_attack_a0.5_s0_e1_bad8_rho0p5_s0     0   continuous               8         0.50      0.107450             5.0                    40   0.202232  0.379464
+       fedavg_attack_a0.5_s0_e1_bad8_rho1p0_s0     0   continuous               8         1.00      0.111700             5.0                    40   0.075893  0.196875
+  fedavg_attack_a0.5_s0_e1b_schedcontinuous_s0     0   continuous               4         0.10      0.101450             5.0                    40   0.458482  0.707589
+       fedavg_attack_a0.5_s1_e1_bad1_rho0p5_s1     1   continuous               1         0.50      0.107000             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s1_e1_bad2_rho0p5_s1     1   continuous               2         0.50      0.107000             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s1_e1_bad4_rho0p1_s1     1   continuous               4         0.10      0.103550             5.0                    40        NaN       NaN
+      fedavg_attack_a0.5_s1_e1_bad4_rho0p25_s1     1   continuous               4         0.25      0.110250             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s1_e1_bad4_rho0p5_s1     1   continuous               4         0.50      0.102600             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s1_e1_bad4_rho1p0_s1     1   continuous               4         1.00      0.109000             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s1_e1_bad8_rho0p5_s1     1   continuous               8         0.50      0.109250             5.0                    40        NaN       NaN
+  fedavg_attack_a0.5_s1_e1b_schedcontinuous_s1     1   continuous               4         0.50      0.102600             5.0                    40        NaN       NaN
+       fedavg_attack_a0.5_s0_e1b_schedearly_s0     0        early               4         0.10      0.101450             5.0                    11   0.117857  0.182589
+       fedavg_attack_a0.5_s1_e1b_schedearly_s1     1        early               4         0.50      0.102600             5.0                    11        NaN       NaN
+fedavg_attack_a0.5_s0_e1b_schedintermittent_s0     0 intermittent               4         0.10      0.131000            10.0                    20   0.200893  0.419196
+fedavg_attack_a0.5_s1_e1b_schedintermittent_s1     1 intermittent               4         0.50      0.142000            10.0                    20        NaN       NaN
+        fedavg_attack_a0.5_s0_e1b_schedlate_s0     0         late               4         0.10      0.568800           140.0                    13   0.620536  0.703571
+        fedavg_attack_a0.5_s1_e1b_schedlate_s1     1         late               4         0.50      0.545250           140.0                    13        NaN       NaN
+  读法：在 n_active_eval_rounds 相当的前提下比较不同 mta_at_onset 的 final_asr。
+  投毒轮数差很多时不能直接比 —— 那就回到了剂量差异。
+[analysis_exp1] 图 -> results/figs/exp1_E1_asr_vs_round_by_nm.png
+[analysis_exp1] 图 -> results/figs/exp1_E1_asr_vs_round_by_rho.png
+[analysis_exp1] 图 -> results/figs/exp1_E2_asr_vs_mta_by_nm.png
+[analysis_exp1] 图 -> results/figs/exp1_E2_asr_vs_mta_by_rho.png
+[analysis_exp1] 图 -> results/figs/exp1_E4_dose_response.png
+[analysis_exp1] 图 -> results/figs/exp1_E5_dose_heatmap.png
+[analysis_exp1] 图 -> results/figs/exp1_E6_asr_tiers.png
+[analysis_exp1] 图 -> results/figs/exp1b_B1_schedules.png
+[analysis_exp1] 图 -> results/figs/exp1b_B2_persistence.png
+=== 离线重算社区口径 ASR：匹配到 31 个 run 目录 ===
+  checkpoints/attack_a0.5_s0_e1_bad16_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad16_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad16_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad16_rho1p0_s0
+  checkpoints/attack_a0.5_s0_e1_bad1_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad1_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad1_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad1_rho1p0_s0
+  checkpoints/attack_a0.5_s0_e1_bad2_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad2_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad2_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad2_rho1p0_s0
+  checkpoints/attack_a0.5_s0_e1_bad32_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad32_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad32_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad32_rho1p0_s0
+  checkpoints/attack_a0.5_s0_e1_bad4_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad4_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad4_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad4_rho1p0_s0
+  checkpoints/attack_a0.5_s0_e1_bad8_rho0p1_s0
+  checkpoints/attack_a0.5_s0_e1_bad8_rho0p25_s0
+  checkpoints/attack_a0.5_s0_e1_bad8_rho0p5_s0
+  checkpoints/attack_a0.5_s0_e1_bad8_rho1p0_s0
+  checkpoints/attack_a0.5_s1_e1_bad1_rho0p5_s1
+  checkpoints/attack_a0.5_s1_e1_bad2_rho0p5_s1
+  checkpoints/attack_a0.5_s1_e1_bad4_rho0p1_s1
+  checkpoints/attack_a0.5_s1_e1_bad4_rho0p25_s1
+  checkpoints/attack_a0.5_s1_e1_bad4_rho0p5_s1
+  checkpoints/attack_a0.5_s1_e1_bad4_rho1p0_s1
+  checkpoints/attack_a0.5_s1_e1_bad8_rho0p5_s1
+
+[dry-run] 未执行。加 --execute 真跑（model_size=18）。

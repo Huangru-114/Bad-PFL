@@ -3,6 +3,8 @@ __pycache__/
 checkpoints/
 checkpoints_1000/
 results/raw
+results/figs
+instrumentation/
 data/
 diag/audit/evidence/leak_arms/
 diag/config.yaml

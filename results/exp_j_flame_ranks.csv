@@ -1,0 +1,4 @@
+signal,mean_rank,pooled_auc,n_malicious_observations,n_rounds_used,n_rounds_no_malicious,n_rounds_all_malicious,rank_1,rank_2,rank_3,rank_4,rank_5,rank_6,rank_7,rank_8,rank_9,rank_10
+l2_to_median,2.62015503875969,0.8555023923444977,516,335,165,0,157,133,104,65,27,10,7,7,3,3
+update_norm,2.643410852713178,0.8526315789473684,516,335,165,0,148,136,107,69,24,15,6,5,5,1
+cos_to_median,5.507751937984496,0.49904306220095696,516,335,165,0,48,38,47,59,64,63,55,59,44,39
