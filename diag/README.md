@@ -69,6 +69,8 @@
 | `run_exp1.py` | 实验 1/1B 的命令生成器（**默认 dry-run**，十字扫描） | `dose_points`, `build_commands`, `estimate_cost` | CLI |
 | `analysis_exp1.py` | 实验 1/1B 的图（含热力图 E1-5、三档 ASR 并列 E1-6）+ 阈值判据 | `crossing_table`, `threshold_verdict`, `dose_response_tiers`, `onset_analysis`, `persistence_table`, `plot_e1_*`, `plot_e1b_*` | CLI |
 | `represent.py` | 表征指标（从 checkpoint **离线**算） | `embed`, `representation_row`, `representation_table` | CLI |
+| `paramspace.py` | 参数空间的逐坐标度量。**纯 numpy，不 import torch** | `build_index`, `displacement`, `cosine`, `sign_agreement`, `group_energy`, `topk_energy`, `rank_quantile`, `binned_curve`, `pearson`, `spearman`, `layer_table` | `exp_t0` |
+| `exp_t0.py` | **T0（Stage 0）**：全局模型的逐坐标位移剖面（纯 CPU） | `build_windows`, `window_report`, `analyze`, `displacement_verdict` | CLI |
 
 ### 测试
 
@@ -90,6 +92,8 @@
 | `tests/test_schedule.py` | 六种调度的边界轮次逐个钉死；after_mta 的锁存与一轮一判 |
 | `tests/test_analysis_exp1.py` | 阈值判据的两个方向 + **MTA 饱和假阳性的回归测试**；1B 剂量必须固定 |
 | `tests/test_represent.py` | 配对距离不得截断；`trigger_pull` 的符号 |
+| `tests/test_paramspace.py` | 逐个手算的范数/能量占比/秩相关；BN 的**结构判据**；零向量 cosine 返回 nan 而非 0 |
+| `tests/test_exp_t0.py` | 窗口优先级（attack > anchor > segment）、缺轮次如实跳过、判词四个分支各一条、整链路冒烟（`.npz`，**不需要 torch**） |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -475,6 +479,34 @@ python -m diag.represent --ckpt-dir checkpoints/attack_a0.5_s0_e1_bad4_rho0p5_s0
 主指标是 **`trigger_pull`**（= 干净样本到目标类原型的距离 − 加触发器后的距离），
 不是 `trigger_repr_distance` 的绝对值 —— 绝对距离受特征尺度影响，不同轮次能差
 好几倍，直接比会把"特征整体变大了"读成"后门变强了"。
+
+### 3.5e T0：全局模型的逐坐标位移剖面（Stage 0，纯 CPU）
+
+```bash
+python -m diag.exp_t0 \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --attack-start 140 --attack-stop 200 \
+    --out-dir results/t0
+```
+
+**不需要重训、不需要 GPU、不排队** —— 只读 `round_*/global.pt`。产出
+`t0_{windows,layers,energy,bins}.csv` 与 `t0_verdict.json`。
+
+窗口分三类，同一对 `(from, to)` 只算一次，`kind` 按 **attack > anchor > segment**
+定优先级 —— 否则 `[140, 200)` 会先被记成 segment，判词就失去参照尺度。
+不直接用 θ₂₀₀ vs θ₄₀₀：B2 臂 B 的前 30 轮掉了 0.23、之后才进地板，一个数会把
+两段混在一起（`PLAN_T0T4.md §1.1 结论 1`）。
+
+**主分析只用可训练参数，BN buffer 单独一行报。** FedBN 下 BN 从不聚合（§4b），
+把它算进位移会得到一个与训练无关的常数偏置。
+
+**判词不输出「(a) 死 / 活」**：T0 测的是**全体坐标**，而休眠容量假说讲的是
+**载体子集**。能给的最强结论是一个条件 —— 若 (a) 要成立，载体的位移必须显著
+低于全局平均。没有噪声底（两条不同 seed 的干净 run，Stage 1 产出）时，
+"位移很小"无法与"所有参数都动得小"区分，判词直说**未能确定**。
+
+`--noise-floor-dir` 要给**两次**（两个不同 seed）才会计算噪声底，给一次会被
+明确拒绝而不是拿一条 run 硬凑。
 
 ### 3.6 扫描矩阵（**默认 dry-run**）
 

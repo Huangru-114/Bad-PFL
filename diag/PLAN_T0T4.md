@@ -3,7 +3,9 @@
 > **新会话开场**：读 `CLAUDE.md` → 本文件 → `HANDOFF.md`（研究全局）。
 > **当前分支**：`claude/bad-pfl-exp-1-nafj1i`（它是 `claude/bad-pfl-trigger-invariance-ucvpcp`
 > 的**严格超集**，merge-base 就是后者的 HEAD；B2 持续性的 config 只在这条分支上）。
-> **状态**：Stage 0 尚未开工。本文件是计划 + 已核实的事实，不是结果。
+> **状态**：Stage 0 的 **CPU 件已就绪**（`diag/paramspace.py` + `diag/exp_t0.py`，
+> 40 条测试全绿），但**还没在真实 checkpoint 上跑过** —— 数据在集群，本机只有
+> 合成 fixture。本文件的其余部分是计划 + 已核实的事实，不是结果。
 
 ---
 
@@ -232,17 +234,38 @@ checkpoints/attack_a0.5_s0_e1b_persist_online_s0/   ← C run（上界），T0 �
 
 ---
 
-## 7. Stage 0 的实现清单（尚未开工）
+## 7. Stage 0 的实现清单（CPU 件已完成，等集群数据）
 
-| 件 | 说明 |
+| 件 | 状态 |
 |---|---|
-| `diag/paramspace.py` | **纯 numpy**（不 import torch），输入 `Dict[str, np.ndarray]`。逐坐标展平 + 逐层分组 + BN/weight 分离；cosine、符号冲突率、逐层范数与能量占比、top-k% 能量、占据度秩、分箱曲线、Pearson/Spearman（手写，不依赖 scipy） |
-| `diag/exp_t0.py` | T0 驱动：读两个 `state_dict`，算位移剖面（全局 / 逐层 / BN vs weight / 与 θ₂₀₀ 幅度的关系），出 CSV |
-| `diag/tests/test_paramspace.py` | 手工构造、**精确可手算**的断言；登记进 `run_tests.py` 的 `TEST_MODULES` |
+| `diag/paramspace.py` | **已实现**。纯 numpy（不 import torch），输入 `Dict[str, np.ndarray]`。逐坐标展平 + 逐层/逐 block 分组 + BN/weight 分离；cosine、符号一致率、逐层范数与能量占比、top-k% 能量、平均秩与分位、分箱曲线、手写 Pearson/Spearman |
+| `diag/exp_t0.py` | **已实现**。T0 驱动：按窗口读两个 `state_dict`，出 `t0_{windows,layers,energy,bins}.csv` + `t0_verdict.json` |
+| `diag/tests/test_paramspace.py` | **已实现**，20 条；另有 `test_exp_t0.py` 20 条（含一条不需要 torch 的整链路冒烟）。均已登记进 `run_tests.py` |
 
-> 可移植来源：`tf-dpfl` 仓库的 `fedavg/probe/{flatten,param_metrics,occupation,analyze,writer}.py`
-> —— 611 行**纯 numpy**、74 条通过的测试，与框架无关，只需换一个 torch 侧的适配器
-> （`state_dict()` → ndarray 列表；按 key 前缀分层；`running_mean/var/num_batches_tracked` 归为 BN buffer）。
+**BN 仿射参数用结构判据识别**（父模块下有 `running_mean`），不靠名字里有没有
+"bn" —— 后者对自定义命名会静默判错，而判错的后果是 BN 被算进"可训练参数"
+的位移里（坑 6 正是要避免这个）。
+
+跑法（`--rounds` 不给就用磁盘上全部全局快照；`global.pt` 缺失时回落 `global.npz`，
+后者只为让没有 torch 的机器也能跑通整条 CLI）：
+
+```bash
+python -m diag.exp_t0 \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --attack-start 140 --attack-stop 200 \
+    --out-dir results/t0
+# Stage 1 的两条干净 run 就位后，再加噪声底：
+#   --noise-floor-dir checkpoints/clean_s0 --noise-floor-dir checkpoints/clean_s1
+```
+
+**判词刻意不输出「(a) 死 / 活」**：T0 测的是**全体坐标**，(a) 讲的是**载体子集**。
+能给的最强结论是一个条件 —— 若 (a) 要成立，载体 P 的位移必须显著低于全局平均，
+这正是 S1 要去证伪的。没有噪声底时"位移很小"无法与"所有参数都动得小"区分，
+判词按铁律 3 直说**未能确定**。两个叙述分界（`RATIO_COMPARABLE=0.5` /
+`RATIO_NEGLIGIBLE=0.05`）**先写死在代码里再看数据**，事后不动（坑 8）。
+
+> 原计划里提到的可移植来源（`tf-dpfl` 仓库的 `fedavg/probe/*`）在本容器里
+> **不可访问**，因此 `paramspace.py` 是重写的，不是移植的。
 
 **S1 载体分离（W/P）需要 L_bd 的梯度 → 需要模型 + 数据 + 生成器 → 在集群上做。**
 Stage 0 的 CPU 部分先出「位移剖面」，它不分 W/P，但能回答前置问题：

@@ -62,9 +62,9 @@ import numpy as np
 
 from . import paramspace as ps
 
-__all__ = ["load_state", "available_global_rounds", "default_rounds",
-           "build_windows", "window_report", "analyze", "displacement_verdict",
-           "write_rows", "main"]
+__all__ = ["load_state", "global_path", "available_global_rounds",
+           "default_rounds", "build_windows", "window_report", "analyze",
+           "displacement_verdict", "write_rows", "main"]
 
 #: 判词里用到的两个阈值。**先写死在这里再看数据**，事后不动
 #: （`PLAN_T0T4.md` 坑 8）。两个都不是"显著性"，只是叙述的分界。
@@ -99,8 +99,22 @@ def load_state(path) -> Dict[str, np.ndarray]:
     return out
 
 
+def global_path(ckpt_dir, round_index: int) -> Optional[Path]:
+    """``round_XXXX/`` 下的全局快照路径；不存在返回 ``None``。
+
+    ``.pt`` 优先，其次 ``.npz``。后者不是集群上会出现的格式，它的用途是让
+    **没有 torch 的机器也能跑通整条 CLI**（本机就是这种情况）—— 有了它，
+    "CSV 列名对不对、判词分支走没走到"这类问题不必等上集群才发现。
+    """
+    directory = Path(ckpt_dir) / f"round_{int(round_index):04d}"
+    for name in ("global.pt", "global.npz"):
+        if (directory / name).exists():
+            return directory / name
+    return None
+
+
 def available_global_rounds(ckpt_dir) -> List[int]:
-    """磁盘上实际存在 ``round_XXXX/global.pt`` 的轮次。
+    """磁盘上实际存在全局快照的轮次。
 
     以磁盘为准而不是读 manifest —— 任务被抢占 / 文件被清理时两者会不一致
     （与 ``snapshots.available_rounds`` 同样的理由）。
@@ -108,12 +122,12 @@ def available_global_rounds(ckpt_dir) -> List[int]:
     ckpt_dir = Path(ckpt_dir)
     rounds: List[int] = []
     for directory in sorted(ckpt_dir.glob("round_*")):
-        if not (directory / "global.pt").exists():
-            continue
         try:
-            rounds.append(int(directory.name.split("_")[1]))
+            round_index = int(directory.name.split("_")[1])
         except (IndexError, ValueError):
             continue
+        if global_path(ckpt_dir, round_index) is not None:
+            rounds.append(round_index)
     return sorted(rounds)
 
 
@@ -430,8 +444,12 @@ def _noise_floor_from(ckpt_dirs: Sequence[str], round_index: int
     dirs = [Path(d) for d in ckpt_dirs if d]
     if len(dirs) < 2:
         return None
-    states = [load_state(d / f"round_{int(round_index):04d}" / "global.pt")
-              for d in dirs[:2]]
+    paths = [global_path(d, round_index) for d in dirs[:2]]
+    if any(path is None for path in paths):
+        raise FileNotFoundError(
+            f"噪声底需要两条干净 run 在 r={round_index} 都有全局快照，"
+            f"实际：{[str(p) if p else '缺' for p in paths]}")
+    states = [load_state(path) for path in paths]
     theta, delta, index = ps.displacement(states[0], states[1])
     trainable = index.kind_mask(ps.TRAINABLE_KINDS)
     return ps.relative_displacement(delta[trainable], theta[trainable])
@@ -467,9 +485,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     needed = sorted({w["round_from"] for w in windows}
                     | {w["round_to"] for w in windows})
     for round_index in needed:
-        path = ckpt_dir / f"round_{round_index:04d}" / "global.pt"
-        if not path.exists():
-            print(f"[exp_t0] ⚠️ 缺 {path}，相关窗口会被跳过（不插值）")
+        path = global_path(ckpt_dir, round_index)
+        if path is None:
+            print(f"[exp_t0] ⚠️ 缺 {ckpt_dir}/round_{round_index:04d}/global.pt，"
+                  f"相关窗口会被跳过（不插值）")
             continue
         states[round_index] = load_state(path)
 

@@ -19,7 +19,18 @@ B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前�
 （占位类 vs 特征层 vs 蒸馏平滑），见 `PLAN_T0T4.md §5`。
 
 计划、已核实的事实、数据位置、以及**八条已知的坑**都在 `PLAN_T0T4.md`。
-下一步是它的 §7「Stage 0 实现清单」（纯 CPU，不排队）。
+
+**Stage 0 的 CPU 件已就绪**（`diag/paramspace.py` + `diag/exp_t0.py`，40 条测试全绿），
+但**还没在真实 checkpoint 上跑过** —— checkpoint 在集群。下一步就是在集群上跑：
+
+```bash
+python -m diag.exp_t0 --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --attack-start 140 --attack-stop 200 --out-dir results/t0
+```
+
+它回答的是**前置问题**「攻击停止后的 200 轮干净训练到底把参数改写了多少」，
+**判不了 (a) 的生死**（T0 测全体坐标，(a) 讲载体子集）；判生死要 S1 载体分离，
+需要 `L_bd` 的梯度，在集群上做。
 
 ---
 
@@ -92,6 +103,7 @@ B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前�
 | `python -m diag.analysis_density` | 图 J-6：ACC/ASR × 恶意客户端数 |
 | `python -m diag.run_exp1` / `analysis_exp1` | **正式实验 1/1B**：剂量边界 + 攻击持续时间 |
 | `python -m diag.represent` | 离线表征分析（trigger_pull 等） |
+| `python -m diag.exp_t0` | **T0（Stage 0）**：全局模型的逐坐标位移剖面，纯 CPU 不排队 |
 
 ## 5. 正式实验 1/1B（最近一次交付，代码就绪，等集群跑）
 

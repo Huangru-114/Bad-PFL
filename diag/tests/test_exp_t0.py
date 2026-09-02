@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 from pathlib import Path
 
@@ -18,7 +19,8 @@ import numpy as np
 
 from diag import paramspace as ps
 from diag.exp_t0 import (RATIO_COMPARABLE, RATIO_NEGLIGIBLE, analyze,
-                         build_windows, displacement_verdict, load_state,
+                         available_global_rounds, build_windows,
+                         displacement_verdict, global_path, load_state, main,
                          window_report, write_rows)
 
 
@@ -242,3 +244,57 @@ def test_load_state_reports_missing_path():
         assert "global.pt" in str(error)
     else:
         raise AssertionError("缺文件时应当报 FileNotFoundError")
+
+
+def _write_run(root: Path, rounds, drift):
+    """造一个 ``round_XXXX/global.npz`` 的假 run。
+
+    ``drift[r]`` 是该轮次 conv1.weight 第二个坐标的值 —— 位移全部集中在这一个
+    坐标上，所以每个窗口的 ‖Δθ‖ 都能手算。
+    """
+    for round_index in rounds:
+        directory = root / f"round_{round_index:04d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        np.savez(directory / "global.npz", **_state(drift[round_index]))
+    return root
+
+
+def test_global_path_falls_back_to_npz_and_lists_rounds():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _write_run(Path(tmp), [200, 400], {200: 4.0, 400: 8.0})
+        assert available_global_rounds(root) == [200, 400]
+        assert global_path(root, 200).name == "global.npz"
+        assert global_path(root, 300) is None
+
+
+def test_main_runs_end_to_end_on_an_npz_fixture():
+    """整条 CLI（读盘 -> 四张 CSV -> 判词 json）在没有 torch 的机器上跑通。"""
+    rounds = [140, 200, 250, 300]
+    drift = {140: 4.0, 200: 8.0, 250: 8.5, 300: 8.6}
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _write_run(Path(tmp) / "attack_fixture", rounds, drift)
+        out_dir = Path(tmp) / "out"
+        assert main(["--ckpt-dir", str(root), "--attack-start", "140",
+                     "--attack-stop", "200", "--out-dir", str(out_dir),
+                     "--n-bins", "4"]) == 0
+
+        with open(out_dir / "t0_windows.csv", encoding="utf-8") as handle:
+            windows = {(row["round_from"], row["round_to"]): row
+                       for row in csv.DictReader(handle)}
+        # 植入窗口 [140,200) 位移 4；干净锚定窗口 [200,400] 位移 0.6
+        assert np.isclose(float(windows[("140", "200")]["trainable_l2_delta"]),
+                          4.0)
+        assert np.isclose(float(windows[("200", "300")]["trainable_l2_delta"]),
+                          0.6)
+        assert windows[("140", "200")]["kind"] == "attack"
+        assert windows[("200", "300")]["phase"] == "clean"
+
+        for name in ("t0_layers.csv", "t0_energy.csv", "t0_bins.csv",
+                     "t0_verdict.json"):
+            assert (out_dir / name).exists(), name
+        verdict = json.loads((out_dir / "t0_verdict.json")
+                             .read_text(encoding="utf-8"))
+        assert verdict["run_id"] == "attack_fixture"
+        assert verdict["noise_floor_relative_displacement"] is None
+        # rel_clean/rel_attack ≈ (0.6/‖θ200‖)/(4/‖θ140‖) ≈ 0.1 -> 中间情形
+        assert "中间情形" in verdict["verdict"]["verdict"]
