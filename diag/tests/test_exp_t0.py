@@ -19,8 +19,9 @@ import numpy as np
 
 from diag import paramspace as ps
 from diag.exp_t0 import (RATIO_COMPARABLE, RATIO_NEGLIGIBLE, analyze,
-                         available_global_rounds, build_windows,
-                         displacement_verdict, global_path, load_state, main,
+                         attack_reference, available_global_rounds,
+                         build_windows, displacement_verdict, global_path,
+                         load_state, load_window_rows, main, random_walk_check,
                          window_report, write_rows)
 
 
@@ -92,6 +93,24 @@ def test_window_report_separates_trainable_from_bn_buffer():
     assert np.isclose(summary["bn_buffer_l2_delta"], 0.0)
 
 
+def test_window_report_reports_aggregated_scope_without_bn_affine():
+    """FedBN 下 bn_affine 从不更新，把它算进分母只会稀释相对位移。"""
+    summary = window_report(_state(4.0), _state(8.0))["summary"]
+    # aggregated = weight(conv1.weight 2) + bias(linear.bias 2) = 4 个坐标
+    assert summary["n_params_aggregated"] == 4
+    # ‖θ_agg‖ = ‖[3,4,1,-1]‖ = sqrt(27)，位移仍是 4
+    assert np.isclose(summary["aggregated_l2_base"], np.sqrt(27.0))
+    assert np.isclose(summary["aggregated_l2_delta"], 4.0)
+    assert np.isclose(summary["aggregated_relative_displacement"],
+                      4.0 / np.sqrt(27.0))
+    # 同一个位移，trainable 口径因为多了 bn 的 sqrt(2) 而被稀释
+    assert (summary["aggregated_relative_displacement"]
+            > summary["trainable_relative_displacement"])
+    # bn_affine 单独一行报：这个 fixture 里它确实没动
+    assert np.isclose(summary["bn_affine_l2_base"], np.sqrt(2.0))
+    assert np.isclose(summary["bn_affine_l2_delta"], 0.0)
+
+
 def test_window_report_rank_correlation_is_hand_computable():
     summary = window_report(_state(4.0), _state(8.0))["summary"]
     # |Δ| 的秩 = [4]*7 + [8]；|θ| 的秩 = [1.5,1.5,4.5,4.5,7,8,4.5,4.5]
@@ -142,11 +161,16 @@ def test_analyze_skips_missing_rounds_without_interpolating():
 # ---------------------------------------------------------------------------
 # 判词：四个分支
 # ---------------------------------------------------------------------------
-def _row(kind, phase, rel, *, start=0, end=100):
-    return {"kind": kind, "phase": phase, "round_from": start, "round_to": end,
-            "span_rounds": end - start,
-            "trainable_relative_displacement": rel,
-            "trainable_cos_from_to": 0.9}
+def _row(kind, phase, rel, *, start=0, end=100, aggregated=None, l2_delta=None):
+    row = {"kind": kind, "phase": phase, "round_from": start, "round_to": end,
+           "span_rounds": end - start,
+           "trainable_relative_displacement": rel,
+           "trainable_cos_from_to": 0.9}
+    if aggregated is not None:
+        row["aggregated_relative_displacement"] = aggregated
+    if l2_delta is not None:
+        row["trainable_l2_delta"] = l2_delta
+    return row
 
 
 def test_verdict_calls_clean_phase_comparable_and_refuses_to_kill_a():
@@ -201,6 +225,92 @@ def test_verdict_without_clean_window_says_so():
     assert "clean_relative_displacement" not in out
 
 
+def test_attack_reference_falls_back_to_a_partial_window():
+    """网格上没有 attack_start 时（首跑就是这样），退到植入阶段内最长的窗口。"""
+    rows = [_row("segment", "attack", 0.5, start=150, end=200),
+            _row("anchor", "clean", 0.3, start=200, end=400)]
+    reference, is_full = attack_reference(rows)
+    assert (reference["round_from"], reference["round_to"]) == (150, 200)
+    assert is_full is False                 # 只覆盖植入窗口的一部分
+    # 有精确的那一格时优先用它，并标 is_full
+    rows.append(_row("attack", "attack", 0.6, start=140, end=200))
+    reference, is_full = attack_reference(rows)
+    assert (reference["round_from"], reference["round_to"]) == (140, 200)
+    assert is_full is True
+
+
+def test_verdict_flags_a_partial_reference_window():
+    rows = [_row("segment", "attack", 0.5, start=150, end=200),
+            _row("anchor", "clean", 0.3, start=200, end=400)]
+    out = displacement_verdict(rows)
+    assert out["attack_window"] == "150->200"
+    assert out["attack_window_is_full"] is False
+    # 退化取的是更短的窗口 -> 参照尺度偏小、比值偏大，必须说出来
+    assert "偏小" in out["verdict"] and "偏大" in out["verdict"]
+
+
+def test_verdict_prefers_aggregated_scope_when_available():
+    """有 aggregated_* 列就用它 —— trainable 的分母含 FedBN 下恒不动的 BN 仿射。"""
+    rows = [_row("attack", "attack", 0.06, start=140, end=200, aggregated=0.12),
+            _row("anchor", "clean", 0.08, start=200, end=400, aggregated=0.16)]
+    out = displacement_verdict(rows)
+    assert out["displacement_scope"] == "aggregated"
+    assert np.isclose(out["clean_relative_displacement"], 0.16)
+    assert np.isclose(out["ratio_clean_over_attack"], 0.16 / 0.12)
+    # 没有该列时回退，并如实标注用的是哪一份
+    bare = displacement_verdict([_row("attack", "attack", 0.06, start=140,
+                                      end=200),
+                                 _row("anchor", "clean", 0.08, start=200,
+                                      end=400)])
+    assert bare["displacement_scope"] == "trainable"
+    assert np.isclose(bare["ratio_clean_over_attack"], 0.08 / 0.06)
+
+
+def test_verdict_reports_a_span_matched_ratio():
+    """整段干净 vs 一小段植入，一半的比值是时长差造成的 —— 同时长的也要报。"""
+    rows = [_row("segment", "attack", 0.10, start=150, end=200),
+            _row("anchor", "clean", 0.08, start=200, end=250),
+            _row("anchor", "clean", 0.20, start=200, end=400)]
+    out = displacement_verdict(rows)
+    assert out["clean_window"] == "200->400"
+    assert out["clean_window_span_matched"] == "200->250"
+    assert np.isclose(out["ratio_span_matched"], 0.08 / 0.10)
+    assert np.isclose(out["ratio_clean_over_attack"], 0.20 / 0.10)
+    assert "同时长比较" in out["verdict"]
+
+
+# ---------------------------------------------------------------------------
+# 随机游走判据
+# ---------------------------------------------------------------------------
+def test_random_walk_check_detects_orthogonal_increments():
+    """3-4-5：两段正交时实测恰好等于平方和开根，比值为 1。"""
+    rows = [_row("anchor", "clean", 0.1, start=200, end=400, l2_delta=5.0),
+            _row("anchor", "clean", 0.1, start=200, end=300, l2_delta=3.0),
+            _row("segment", "clean", 0.1, start=300, end=400, l2_delta=4.0)]
+    out = random_walk_check(rows)
+    assert out["window"] == "200->400"
+    assert out["n_segments"] == 2
+    assert np.isclose(out["quadrature_l2_delta"], 5.0)
+    assert np.isclose(out["linear_l2_delta"], 7.0)
+    assert np.isclose(out["observed_over_quadrature"], 1.0)
+    assert np.isclose(out["linear_over_quadrature"], 1.4)
+
+
+def test_random_walk_check_tiles_by_rounds_not_by_kind():
+    """锚定起点后的第一格被标成 anchor（优先级），只收 segment 会永远铺不满。"""
+    rows = [_row("anchor", "clean", 0.1, start=200, end=300, l2_delta=5.0),
+            _row("anchor", "clean", 0.1, start=200, end=250, l2_delta=3.0),
+            _row("segment", "clean", 0.1, start=250, end=300, l2_delta=4.0)]
+    assert random_walk_check(rows)["n_segments"] == 2
+
+
+def test_random_walk_check_returns_none_on_a_gap():
+    """铺不满就不比，**不用可用的段硬凑**。"""
+    rows = [_row("anchor", "clean", 0.1, start=200, end=400, l2_delta=5.0),
+            _row("segment", "clean", 0.1, start=300, end=400, l2_delta=4.0)]
+    assert random_walk_check(rows) is None
+
+
 def test_verdict_prefers_the_longest_clean_window():
     rows = [_row("attack", "attack", 1.0, start=140, end=200),
             _row("anchor", "clean", 0.9, start=200, end=250),
@@ -222,6 +332,52 @@ def test_write_rows_unions_columns_and_leaves_gaps_empty():
     assert list(table[0].keys()) == ["a", "b", "c"]
     assert table[0]["c"] == ""
     assert table[1]["b"] == ""
+
+
+def test_load_window_rows_round_trips_and_rebuilds_aggregated():
+    """写出的 CSV 读回来要能直接进判词；老 CSV 靠 layers 精确重建 aggregated。"""
+    states = {200: _state(4.0), 400: _state(8.0)}
+    windows = build_windows([200, 400], attack_start=140, attack_stop=200)
+    tables = analyze(states, windows, run_id="fixture")
+    truth = tables["windows"][0]["aggregated_relative_displacement"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        windows_csv = write_rows(tables["windows"], Path(tmp) / "w.csv")
+        layers_csv = write_rows(tables["layers"], Path(tmp) / "l.csv")
+        # 模拟首跑的老 CSV：把 aggregated_* 列整列删掉
+        stripped = [{k: v for k, v in row.items()
+                     if not k.startswith("aggregated_")}
+                    for row in tables["windows"]]
+        old_csv = write_rows(stripped, Path(tmp) / "old.csv")
+
+        rows = load_window_rows(windows_csv)
+        assert rows[0]["round_from"] == 200 and rows[0]["span_rounds"] == 200
+        assert np.isclose(rows[0]["aggregated_relative_displacement"], truth)
+
+        without = load_window_rows(old_csv)
+        assert "aggregated_relative_displacement" not in without[0]
+        rebuilt = load_window_rows(old_csv, layers_csv)
+        assert np.isclose(rebuilt[0]["aggregated_relative_displacement"], truth)
+        # 判词在两种输入下都能跑，只是标注的 scope 不同
+        assert displacement_verdict(without)["displacement_scope"] == "trainable"
+        assert (displacement_verdict(rebuilt)["displacement_scope"]
+                == "aggregated")
+
+
+def test_load_window_rows_leaves_aggregated_missing_when_kinds_absent():
+    """layers 里缺 kind 行的窗口就保持没有 aggregated_*——不猜、不补。"""
+    states = {200: _state(4.0), 400: _state(8.0)}
+    tables = analyze(states, build_windows([200, 400], 140, 200),
+                     run_id="fixture")
+    stripped = [{k: v for k, v in row.items()
+                 if not k.startswith("aggregated_")}
+                for row in tables["windows"]]
+    only_weight = [row for row in tables["layers"]
+                   if row.get("scope") == "kind" and row["group"] == "weight"]
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = load_window_rows(write_rows(stripped, Path(tmp) / "w.csv"),
+                                write_rows(only_weight, Path(tmp) / "l.csv"))
+    assert "aggregated_relative_displacement" not in rows[0]
 
 
 def test_load_state_reads_npz_without_torch():

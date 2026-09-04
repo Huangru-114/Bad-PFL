@@ -82,12 +82,32 @@
       "span_rounds": 50
     }
   ],
+  "source": "recomputed from results/t0/t0_windows.csv + results/t0/t0_layers.csv",
   "verdict": {
     "n_windows": 10,
+    "displacement_scope": "aggregated",
     "clean_window": "200->400",
-    "clean_relative_displacement": 0.0826986031196178,
+    "clean_span_rounds": 200,
+    "clean_relative_displacement": 0.1561509858746594,
     "clean_cos_from_to": 0.9966638488908475,
-    "verdict": "部分结论：干净阶段 200->400 的相对位移 0.0827（cos(θ_from, θ_to)=0.9967）。**缺植入窗口做参照尺度**（需要 attack_start 与 attack_stop 两个快照），因此无法说它是大是小 —— 未能确定。"
+    "attack_window": "150->200",
+    "attack_span_rounds": 50,
+    "attack_window_is_full": false,
+    "attack_relative_displacement": 0.1175050793079456,
+    "ratio_clean_over_attack": 1.32888711530022,
+    "clean_window_span_matched": "200->250",
+    "clean_relative_displacement_span_matched": 0.10292908247304484,
+    "ratio_span_matched": 0.8759543253725958,
+    "verdict": "干净阶段的参数改写与植入阶段**相当**（比值 1.33 ≥ 0.5）：200 轮干净训练把参数移动了 0.1562（相对），而 ASR 只落到 0.41 的地板不再下去。同时长比较（200->250 vs 150->200，各 50 轮）也给 0.876。这对 (a) 休眠容量施加了一个**强约束** —— (a) 若要成立，后门载体 P 必须是一个位移显著低于全局平均的小子集。**T0 判不了它的生死**（T0 测全体坐标，不分 W/P），这正是 S1 载体分离要去证伪的。（口径：位移在 **global** 模型上测，而 B2 的 ASR 是 **benign 个性化模型**口径 —— 两者不是同一个模型；分母 = `aggregated` 参数，已扣掉 FedBN 冻结的 BN 仿射参数；BN buffer 单独报。⚠️ 参照窗口只覆盖植入阶段的一部分（50 轮，快照网格上没有 attack_start），参照尺度因此偏小、比值偏大。）"
+  },
+  "random_walk": {
+    "window": "200->400",
+    "n_segments": 4,
+    "observed_l2_delta": 6.7545796867218195,
+    "quadrature_l2_delta": 6.354727063745533,
+    "linear_l2_delta": 11.974844388915082,
+    "observed_over_quadrature": 1.0629220765841374,
+    "linear_over_quadrature": 1.8843994822740668
   },
   "noise_floor_relative_displacement": null
 }

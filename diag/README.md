@@ -508,6 +508,21 @@ python -m diag.exp_t0 \
 `--noise-floor-dir` 要给**两次**（两个不同 seed）才会计算噪声底，给一次会被
 明确拒绝而不是拿一条 run 硬凑。
 
+**两份口径都出**：`trainable_*`（含 BN 仿射）与 `aggregated_*`（= weight + bias，
+真正参与聚合的那部分）。FedBN 下全局模型的 BN 仿射参数**恒不更新**（首跑实测位移
+恰好为 0），把它算进分母会凭空稀释相对位移约 1.9 倍，所以判词用 `aggregated`。
+
+改了判词逻辑不必重跑 T0（那要重读十几个几百 MB 的 state_dict）：
+
+```bash
+python -m diag.exp_t0 --from-windows results/t0/t0_windows.csv \
+                      --from-layers  results/t0/t0_layers.csv \
+                      --out-dir results/t0
+```
+
+老 CSV 没有 `aggregated_*` 列时，`--from-layers` 会从 `scope=kind` 行**精确重建**
+（不是估计）；缺 kind 行的窗口就保持没有该列，判词自己回退到 `trainable` 并标注。
+
 ### 3.6 扫描矩阵（**默认 dry-run**）
 
 ```bash

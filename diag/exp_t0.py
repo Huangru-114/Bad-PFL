@@ -64,12 +64,22 @@ from . import paramspace as ps
 
 __all__ = ["load_state", "global_path", "available_global_rounds",
            "default_rounds", "build_windows", "window_report", "analyze",
-           "displacement_verdict", "write_rows", "main"]
+           "displacement_verdict", "attack_reference", "random_walk_check",
+           "load_window_rows", "write_rows", "main"]
 
 #: 判词里用到的两个阈值。**先写死在这里再看数据**，事后不动
 #: （`PLAN_T0T4.md` 坑 8）。两个都不是"显著性"，只是叙述的分界。
 RATIO_COMPARABLE = 0.5      # 干净段位移 / 植入段位移 >= 此值 -> 称"相当"
 RATIO_NEGLIGIBLE = 0.05     # <= 此值 -> 称"几乎没动"，此时必须有噪声底才可读
+
+#: **实际参与联邦聚合**的参数种类。FedBN 下 BN 从不聚合，全局模型的
+#: ``bn.weight`` / ``bn.bias`` 与 buffer 一样停在初始化值（首跑实测：10 个窗口
+#: 的 bn_affine 位移**恰好为 0**，‖θ_bn‖ 恒为 sqrt(4800)=69.282）。把它们算进
+#: 分母只会把 ‖θ‖ 从 43.3 抬到 81.7，凭空稀释相对位移约 1.9 倍，而分子一点不变。
+#: 所以除了 ``trainable_*``（含 bn_affine）之外**另外**报一份 ``aggregated_*``。
+#: 两份都出、都进 CSV —— 换分母不是为了让某个数好看，比值本身几乎不受影响
+#: （首跑：1.35 vs 1.33）。
+AGGREGATED_KINDS: Tuple[str, ...] = (ps.KIND_WEIGHT, ps.KIND_BIAS)
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +220,15 @@ def window_report(state_from: Dict[str, np.ndarray],
     theta, delta, index = ps.displacement(state_from, state_to)
     trainable = index.kind_mask(ps.TRAINABLE_KINDS)
     bn_buffer = index.kind_mask((ps.KIND_BN_BUFFER,))
+    bn_affine = index.kind_mask((ps.KIND_BN_AFFINE,))
+    aggregated = index.kind_mask(AGGREGATED_KINDS)
 
     theta_t, delta_t = theta[trainable], delta[trainable]
+    theta_a, delta_a = theta[aggregated], delta[aggregated]
     summary: Dict[str, Any] = {
         "n_params_total": int(theta.size),
         "n_params_trainable": int(trainable.sum()),
+        "n_params_aggregated": int(aggregated.sum()),
         "n_params_bn_buffer": int(bn_buffer.sum()),
         "excluded_keys": ";".join(index.excluded),
         "trainable_l2_base": ps.l2(theta_t),
@@ -229,6 +243,14 @@ def window_report(state_from: Dict[str, np.ndarray],
                                        if delta_t.size else float("nan")),
         "trainable_max_abs_delta": (float(np.abs(delta_t).max())
                                     if delta_t.size else float("nan")),
+        # 实际参与聚合的那部分（不含 BN 仿射 —— FedBN 下它从不更新）
+        "aggregated_l2_base": ps.l2(theta_a),
+        "aggregated_l2_delta": ps.l2(delta_a),
+        "aggregated_relative_displacement": ps.relative_displacement(delta_a,
+                                                                     theta_a),
+        "aggregated_cos_theta_delta": ps.cosine(theta_a, delta_a),
+        "bn_affine_l2_base": ps.l2(theta[bn_affine]),
+        "bn_affine_l2_delta": ps.l2(delta[bn_affine]),
         "bn_buffer_l2_base": ps.l2(theta[bn_buffer]),
         "bn_buffer_l2_delta": ps.l2(delta[bn_buffer]),
         "bn_buffer_relative_displacement": ps.relative_displacement(
@@ -328,6 +350,40 @@ def _pick(rows: Sequence[Dict[str, Any]], kind: str, phase: str = "",
         min(candidates, key=lambda r: r["span_rounds"])
 
 
+def attack_reference(window_rows: Sequence[Dict[str, Any]]
+                     ) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """挑一个植入阶段的窗口做参照尺度，并说明它是否**完整覆盖**植入窗口。
+
+    返回 ``(row, is_full)``。首选 ``kind == "attack"``（即恰好
+    ``[attack_start, attack_stop)`` 那一格）；快照网格上没有 ``attack_start``
+    时 —— 首跑就是这样，``snapshot_every=50`` 的网格是 [50,…,400]，140 不在上面
+    —— 退而取**落在植入阶段内最长的那个窗口**（首跑是 150→200，覆盖 60 轮里的 50 轮）。
+
+    退化取的是**更短**的窗口，因此参照尺度偏小、比值偏大。这个方向必须随判词
+    一起说清楚，不能让"比值大"看起来像是攻击窗口位移小。
+    """
+    exact = _pick(window_rows, "attack")
+    if exact is not None:
+        return exact, True
+    partial = [r for r in window_rows if r["phase"] == "attack"]
+    if not partial:
+        return None, False
+    return max(partial, key=lambda r: r["span_rounds"]), False
+
+
+def _displacement_of(row: Dict[str, Any]) -> Tuple[float, str]:
+    """取一行的相对位移，优先用**实际参与聚合**的那份，并返回用的是哪一份。
+
+    旧 CSV（首跑）没有 ``aggregated_*`` 列，回退到 ``trainable_*`` 并如实标注 ——
+    两者差一个 FedBN 冻结 BN 仿射造成的常数稀释因子，比值几乎不受影响，
+    但**绝对值差约 1.9 倍**，混着读会错。
+    """
+    value = row.get("aggregated_relative_displacement")
+    if value is not None and str(value) != "" and np.isfinite(float(value)):
+        return float(value), "aggregated"
+    return float(row["trainable_relative_displacement"]), "trainable"
+
+
 def displacement_verdict(window_rows: Sequence[Dict[str, Any]],
                          noise_floor: Optional[float] = None) -> Dict[str, Any]:
     """把位移剖面翻译成"这给 (a) 施加了什么约束"。
@@ -340,7 +396,7 @@ def displacement_verdict(window_rows: Sequence[Dict[str, Any]],
     没有它时，"位移很小"无法与"所有参数都动得小"区分，判词会如实说 **未能确定**。
     """
     result: Dict[str, Any] = {"n_windows": len(window_rows)}
-    attack = _pick(window_rows, "attack")
+    attack, attack_is_full = attack_reference(window_rows)
     clean = _pick(window_rows, "anchor", phase="clean")
     if clean is None:
         clean = _pick(window_rows, "segment", phase="clean")
@@ -350,9 +406,11 @@ def displacement_verdict(window_rows: Sequence[Dict[str, Any]],
                              "T0 需要攻击停止轮之后的至少两个全局快照。")
         return result
 
-    rel_clean = float(clean["trainable_relative_displacement"])
+    rel_clean, scope = _displacement_of(clean)
     result.update({
+        "displacement_scope": scope,
         "clean_window": f"{clean['round_from']}->{clean['round_to']}",
+        "clean_span_rounds": int(clean["span_rounds"]),
         "clean_relative_displacement": rel_clean,
         "clean_cos_from_to": float(clean["trainable_cos_from_to"]),
     })
@@ -364,31 +422,62 @@ def displacement_verdict(window_rows: Sequence[Dict[str, Any]],
         result["verdict"] = (
             f"部分结论：干净阶段 {result['clean_window']} 的相对位移 "
             f"{rel_clean:.4g}（cos(θ_from, θ_to)="
-            f"{result['clean_cos_from_to']:.4f}）。**缺植入窗口做参照尺度**"
-            f"（需要 attack_start 与 attack_stop 两个快照），"
+            f"{result['clean_cos_from_to']:.4f}）。**缺植入阶段的窗口做参照尺度**"
+            f"（快照网格上要有至少两个落在 [attack_start, attack_stop] 内的轮次），"
             f"因此无法说它是大是小 —— 未能确定。")
         return result
 
-    rel_attack = float(attack["trainable_relative_displacement"])
+    rel_attack, _ = _displacement_of(attack)
     ratio = rel_clean / rel_attack if rel_attack > 0 else float("nan")
     result.update({
         "attack_window": f"{attack['round_from']}->{attack['round_to']}",
+        "attack_span_rounds": int(attack["span_rounds"]),
+        "attack_window_is_full": attack_is_full,
         "attack_relative_displacement": rel_attack,
         "ratio_clean_over_attack": ratio,
     })
 
-    declaration = ("（口径：位移在 **global** 模型上测，而 B2 的 ASR 是 "
-                   "**benign 个性化模型**口径 —— 两者不是同一个模型；"
-                   "BN buffer 未计入，单独报。）")
+    # 位移随窗口长度增长，所以"整个干净阶段 vs 一段植入窗口"这个比值一半是
+    # 时长差造成的。再给一个**同时长**的比值：干净阶段里跨度与参照窗口相同的
+    # 那一格。两个都报，不挑一个。
+    matched = [r for r in window_rows if r["phase"] == "clean"
+               and int(r["span_rounds"]) == int(attack["span_rounds"])]
+    if matched:
+        earliest = min(matched, key=lambda r: r["round_from"])
+        rel_matched, _ = _displacement_of(earliest)
+        result["clean_window_span_matched"] = (
+            f"{earliest['round_from']}->{earliest['round_to']}")
+        result["clean_relative_displacement_span_matched"] = rel_matched
+        result["ratio_span_matched"] = (rel_matched / rel_attack
+                                        if rel_attack > 0 else float("nan"))
+
+    scope_note = ("已扣掉 FedBN 冻结的 BN 仿射参数"
+                  if scope == "aggregated" else
+                  "**含** BN 仿射参数，FedBN 下它恒为 0 位移，会稀释相对位移")
+    partial_note = ("" if attack_is_full else
+                    f"⚠️ 参照窗口只覆盖植入阶段的一部分"
+                    f"（{attack['span_rounds']} 轮，快照网格上没有 attack_start），"
+                    f"参照尺度因此偏小、比值偏大。")
+    declaration = (f"（口径：位移在 **global** 模型上测，而 B2 的 ASR 是 "
+                   f"**benign 个性化模型**口径 —— 两者不是同一个模型；"
+                   f"分母 = `{scope}` 参数，{scope_note}；BN buffer 单独报。"
+                   f"{partial_note}）")
 
     if not np.isfinite(ratio):
         result["verdict"] = ("未能确定：植入窗口的位移为 0，比值无定义。" +
                              declaration)
     elif ratio >= RATIO_COMPARABLE:
+        matched_text = ""
+        if "ratio_span_matched" in result:
+            matched_text = (f"同时长比较（{result['clean_window_span_matched']} "
+                            f"vs {result['attack_window']}，各 "
+                            f"{attack['span_rounds']} 轮）也给 "
+                            f"{result['ratio_span_matched']:.3g}。")
         result["verdict"] = (
             f"干净阶段的参数改写与植入阶段**相当**（比值 {ratio:.3g} ≥ "
-            f"{RATIO_COMPARABLE}）：200 轮干净训练把可训练参数移动了 "
-            f"{rel_clean:.4g}（相对），而 ASR 只从 0.63 落到 0.41 的地板。"
+            f"{RATIO_COMPARABLE}）：{clean['span_rounds']} 轮干净训练把参数移动了 "
+            f"{rel_clean:.4g}（相对），而 ASR 只落到 0.41 的地板不再下去。"
+            f"{matched_text}"
             f"这对 (a) 休眠容量施加了一个**强约束** —— (a) 若要成立，后门载体 P "
             f"必须是一个位移显著低于全局平均的小子集。**T0 判不了它的生死**"
             f"（T0 测全体坐标，不分 W/P），这正是 S1 载体分离要去证伪的。"
@@ -418,6 +507,143 @@ def displacement_verdict(window_rows: Sequence[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # 输出
 # ---------------------------------------------------------------------------
+def random_walk_check(window_rows: Sequence[Dict[str, Any]]
+                      ) -> Optional[Dict[str, Any]]:
+    """干净阶段的漂移是**有方向的**还是**随机游走**？
+
+    做法：拿最长的干净锚定窗口，找出正好把它铺满的连续 segment，然后比三个数：
+
+    - ``observed``   = 锚定窗口实测的 ‖Δθ‖
+    - ``quadrature`` = 各段 ‖Δθ‖ 的平方和开根 —— 各段两两正交时的期望值
+    - ``linear``     = 各段 ‖Δθ‖ 直接相加 —— 各段完全同向时的值
+
+    ``observed / quadrature ≈ 1`` 说明相邻段的位移彼此近似正交，良性训练**不是**
+    在朝某个固定方向持续推进，而更像在参数空间里随机游走；越接近
+    ``linear / quadrature`` 则越是定向漂移。
+
+    这对判 (a)/(c) 有用：定向漂移意味着存在一个"良性任务要去的地方"，后门被
+    挤出去只是时间问题；随机游走则意味着 200 轮之后还留着的东西，再跑 200 轮
+    大概率还在 —— 与 B2 观察到的地板一致。
+
+    铺不满（有缺口或重叠）时返回 ``None``，**不用可用的段硬凑**。
+    """
+    def norm_of(row: Dict[str, Any]) -> Optional[float]:
+        for key in ("aggregated_l2_delta", "trainable_l2_delta"):
+            value = row.get(key)
+            if value not in (None, ""):
+                return float(value)
+        return None
+
+    anchors = [r for r in window_rows
+               if r["kind"] == "anchor" and r["phase"] == "clean"]
+    if not anchors:
+        return None
+    whole = max(anchors, key=lambda r: r["span_rounds"])
+
+    # 按**轮次**贪心地铺，不按 kind —— 锚定起点后的第一格在 build_windows 里被
+    # 标成 anchor（优先级 anchor > segment），只收 kind=="segment" 会漏掉它，
+    # 于是永远铺不满。每步取从 cursor 出发**最短**的那一格，得到最细的分解。
+    starts: Dict[int, List[Dict[str, Any]]] = {}
+    for row in window_rows:
+        if row is whole or row["phase"] != "clean":
+            continue
+        if (row["round_from"] < whole["round_from"]
+                or row["round_to"] > whole["round_to"]):
+            continue
+        starts.setdefault(int(row["round_from"]), []).append(row)
+
+    segments: List[Dict[str, Any]] = []
+    cursor = int(whole["round_from"])
+    while cursor < int(whole["round_to"]):
+        candidates = starts.get(cursor)
+        if not candidates:
+            return None                     # 有缺口 -> 不比，也不用别的段硬凑
+        step = min(candidates, key=lambda r: r["round_to"])
+        segments.append(step)
+        cursor = int(step["round_to"])
+    if len(segments) < 2:
+        return None
+
+    observed = norm_of(whole)
+    parts = [norm_of(segment) for segment in segments]
+    if observed is None or any(part is None for part in parts):
+        return None
+    quadrature = float(np.sqrt(sum(part ** 2 for part in parts)))
+    linear = float(sum(parts))
+    if quadrature <= 0:
+        return None
+    return {
+        "window": f"{whole['round_from']}->{whole['round_to']}",
+        "n_segments": len(segments),
+        "observed_l2_delta": float(observed),
+        "quadrature_l2_delta": quadrature,
+        "linear_l2_delta": linear,
+        "observed_over_quadrature": float(observed) / quadrature,
+        "linear_over_quadrature": linear / quadrature,
+    }
+
+
+def load_window_rows(windows_csv, layers_csv=None) -> List[Dict[str, Any]]:
+    """从已有的 ``t0_windows.csv`` 读回窗口行，供**只重算判词**用。
+
+    用途：checkpoint 在集群、CSV 已经带回本地时，改了判词逻辑不必重跑一遍
+    T0（那要重新读十几个 400MB 的 state_dict）。
+
+    ``layers_csv`` 可选。首跑的 CSV 没有 ``aggregated_*`` 列，但
+    ``t0_layers.csv`` 的 ``scope=kind`` 行里有逐 kind 的 ``l2_base`` /
+    ``l2_delta``，足以把 ``aggregated_*`` **精确**重建出来（不是估计）：
+    对 ``AGGREGATED_KINDS`` 的各 kind 做平方和即可。给了 layers 却缺某个窗口的
+    kind 行时，那个窗口就保持没有 ``aggregated_*``，判词会自己回退到 trainable
+    并标注 —— 不猜、不补。
+    """
+    with open(Path(windows_csv), encoding="utf-8") as handle:
+        rows = [dict(row) for row in csv.DictReader(handle)]
+    for row in rows:
+        for key in ("round_from", "round_to", "span_rounds"):
+            row[key] = int(row[key])
+        for key, value in list(row.items()):
+            if key in ("run_id", "kind", "phase", "excluded_keys"):
+                continue
+            if isinstance(value, str) and value != "":
+                try:
+                    row[key] = float(value)
+                except ValueError:
+                    pass
+        row["round_from"] = int(row["round_from"])
+        row["round_to"] = int(row["round_to"])
+        row["span_rounds"] = int(row["span_rounds"])
+
+    if layers_csv is None:
+        return rows
+
+    with open(Path(layers_csv), encoding="utf-8") as handle:
+        kind_rows = [row for row in csv.DictReader(handle)
+                     if row.get("scope") == "kind"]
+    by_window: Dict[Tuple[int, int], Dict[str, Dict[str, float]]] = {}
+    for row in kind_rows:
+        key = (int(row["round_from"]), int(row["round_to"]))
+        by_window.setdefault(key, {})[row["group"]] = {
+            "l2_base": float(row["l2_base"]),
+            "l2_delta": float(row["l2_delta"]),
+            "n_params": float(row["n_params"]),
+        }
+    for row in rows:
+        groups = by_window.get((row["round_from"], row["round_to"]), {})
+        if not all(kind in groups for kind in AGGREGATED_KINDS):
+            continue
+        base = np.sqrt(sum(groups[k]["l2_base"] ** 2 for k in AGGREGATED_KINDS))
+        delta = np.sqrt(sum(groups[k]["l2_delta"] ** 2
+                            for k in AGGREGATED_KINDS))
+        row["n_params_aggregated"] = int(sum(groups[k]["n_params"]
+                                             for k in AGGREGATED_KINDS))
+        row["aggregated_l2_base"] = float(base)
+        row["aggregated_l2_delta"] = float(delta)
+        row["aggregated_relative_displacement"] = (float(delta / base)
+                                                   if base > 0
+                                                   else float("nan"))
+    return rows
+
+
 def write_rows(rows: Sequence[Dict[str, Any]], path) -> Path:
     """写 CSV。列取所有行键的并集，缺的留**空**（不是 0，不是 "N/A"）。"""
     path = Path(path)
@@ -458,9 +684,15 @@ def _noise_floor_from(ckpt_dirs: Sequence[str], round_index: int
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="T0：全局模型的逐坐标位移剖面（Stage 0，纯 CPU）")
-    parser.add_argument("--ckpt-dir", required=True,
+    parser.add_argument("--ckpt-dir", default="",
                         help="B2 的 A/B run 目录，例如 "
                              "checkpoints/attack_a0.5_s0_e1b_persist_s0")
+    parser.add_argument("--from-windows", default="",
+                        help="只重算判词：从已有的 t0_windows.csv 读，"
+                             "不碰 checkpoint（改判词逻辑时用，省去重读快照）")
+    parser.add_argument("--from-layers", default="",
+                        help="配合 --from-windows：给 t0_layers.csv 时，"
+                             "从 scope=kind 行精确重建 aggregated_* 列")
     parser.add_argument("--rounds", default="",
                         help="逗号分隔的轮次；默认用磁盘上全部 global 快照")
     parser.add_argument("--attack-start", type=int, default=140)
@@ -475,70 +707,117 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--n-bins", type=int, default=10)
     args = parser.parse_args(argv)
 
-    ckpt_dir = Path(args.ckpt_dir)
-    rounds = ([int(r) for r in args.rounds.split(",") if r.strip()]
-              if args.rounds else default_rounds(ckpt_dir))
-    windows = build_windows(rounds, args.attack_start, args.attack_stop,
-                            args.anchor)
-
-    states: Dict[int, Dict[str, np.ndarray]] = {}
-    needed = sorted({w["round_from"] for w in windows}
-                    | {w["round_to"] for w in windows})
-    for round_index in needed:
-        path = global_path(ckpt_dir, round_index)
-        if path is None:
-            print(f"[exp_t0] ⚠️ 缺 {ckpt_dir}/round_{round_index:04d}/global.pt，"
-                  f"相关窗口会被跳过（不插值）")
-            continue
-        states[round_index] = load_state(path)
-
-    run_id = ckpt_dir.name
-    tables = analyze(states, windows, n_bins=args.n_bins, run_id=run_id)
-
     out_dir = Path(args.out_dir)
-    for name in ("windows", "layers", "energy", "bins"):
-        if tables[name]:
-            path = write_rows(tables[name], out_dir / f"t0_{name}.csv")
-            print(f"[exp_t0] {len(tables[name]):>6} 行 -> {path}")
-    if tables["skipped"]:
-        print(f"[exp_t0] ⚠️ 跳过 {len(tables['skipped'])} 个窗口："
-              f"{[(w['round_from'], w['round_to']) for w in tables['skipped']]}")
-
-    noise_round = (args.noise_floor_round if args.noise_floor_round is not None
-                   else (rounds[-1] if rounds else None))
     noise_floor = None
-    if len(args.noise_floor_dir) >= 2 and noise_round is not None:
-        noise_floor = _noise_floor_from(args.noise_floor_dir, noise_round)
-        print(f"[exp_t0] 噪声底（两条干净 run 在 r={noise_round} 的相对位移）="
-              f"{noise_floor:.6g}")
-    elif args.noise_floor_dir:
-        print("[exp_t0] ⚠️ 噪声底需要**两条不同 seed** 的干净 run，"
-              f"只给了 {len(args.noise_floor_dir)} 条 —— 不计算。")
 
-    print("\n=== 位移剖面（可训练参数，BN buffer 已排除）===")
-    print(f"  {'window':>14}{'kind':>9}{'phase':>7}{'rel |Δθ|/|θ|':>14}"
+    if args.from_windows:
+        window_rows = load_window_rows(args.from_windows,
+                                       args.from_layers or None)
+        if not window_rows:
+            raise SystemExit(f"{args.from_windows} 里一行都没有")
+        run_id = str(window_rows[0].get("run_id", ""))
+        rounds = sorted({r["round_from"] for r in window_rows}
+                        | {r["round_to"] for r in window_rows})
+        windows = [{key: row[key] for key in
+                    ("round_from", "round_to", "kind", "phase", "span_rounds")}
+                   for row in window_rows]
+        print(f"[exp_t0] 只重算判词：{len(window_rows)} 个窗口读自 "
+              f"{args.from_windows}"
+              + (f"（aggregated_* 由 {args.from_layers} 重建）"
+                 if args.from_layers else ""))
+    else:
+        if not args.ckpt_dir:
+            raise SystemExit("要么给 --ckpt-dir，要么给 --from-windows")
+        ckpt_dir = Path(args.ckpt_dir)
+        rounds = ([int(r) for r in args.rounds.split(",") if r.strip()]
+                  if args.rounds else default_rounds(ckpt_dir))
+        windows = build_windows(rounds, args.attack_start, args.attack_stop,
+                                args.anchor)
+
+        states: Dict[int, Dict[str, np.ndarray]] = {}
+        needed = sorted({w["round_from"] for w in windows}
+                        | {w["round_to"] for w in windows})
+        for round_index in needed:
+            path = global_path(ckpt_dir, round_index)
+            if path is None:
+                print(f"[exp_t0] ⚠️ 缺 {ckpt_dir}/round_{round_index:04d}/"
+                      f"global.pt，相关窗口会被跳过（不插值）")
+                continue
+            states[round_index] = load_state(path)
+
+        run_id = ckpt_dir.name
+        tables = analyze(states, windows, n_bins=args.n_bins, run_id=run_id)
+        window_rows = tables["windows"]
+
+        for name in ("windows", "layers", "energy", "bins"):
+            if tables[name]:
+                path = write_rows(tables[name], out_dir / f"t0_{name}.csv")
+                print(f"[exp_t0] {len(tables[name]):>6} 行 -> {path}")
+        if tables["skipped"]:
+            print(f"[exp_t0] ⚠️ 跳过 {len(tables['skipped'])} 个窗口："
+                  f"{[(w['round_from'], w['round_to']) for w in tables['skipped']]}")
+
+        noise_round = (args.noise_floor_round
+                       if args.noise_floor_round is not None
+                       else (rounds[-1] if rounds else None))
+        if len(args.noise_floor_dir) >= 2 and noise_round is not None:
+            noise_floor = _noise_floor_from(args.noise_floor_dir, noise_round)
+            print(f"[exp_t0] 噪声底（两条干净 run 在 r={noise_round} 的相对位移）="
+                  f"{noise_floor:.6g}")
+        elif args.noise_floor_dir:
+            print("[exp_t0] ⚠️ 噪声底需要**两条不同 seed** 的干净 run，"
+                  f"只给了 {len(args.noise_floor_dir)} 条 —— 不计算。")
+
+    has_aggregated = any(row.get("aggregated_relative_displacement") not in
+                         (None, "") for row in window_rows)
+    print("\n=== 位移剖面（BN buffer 已排除）===")
+    print(f"  {'window':>14}{'kind':>9}{'phase':>7}"
+          f"{'rel(trainable)':>16}{'rel(aggregated)':>17}"
           f"{'cos(θ,Δθ)':>12}{'cos(from,to)':>14}")
-    for row in tables["windows"]:
+    for row in window_rows:
         label = f"{row['round_from']}->{row['round_to']}"
+        aggregated = row.get("aggregated_relative_displacement")
+        cell = (f"{float(aggregated):>17.6g}"
+                if has_aggregated and aggregated not in (None, "")
+                else f"{'':>17}")
         print(f"  {label:>14}{row['kind']:>9}{row['phase']:>7}"
-              f"{row['trainable_relative_displacement']:>14.6g}"
-              f"{row['trainable_cos_theta_delta']:>12.4f}"
-              f"{row['trainable_cos_from_to']:>14.6f}")
+              f"{float(row['trainable_relative_displacement']):>16.6g}{cell}"
+              f"{float(row['trainable_cos_theta_delta']):>12.4f}"
+              f"{float(row['trainable_cos_from_to']):>14.6f}")
+    if not has_aggregated:
+        print("  （没有 aggregated_* 列：判词会用 trainable，"
+              "分母含 FedBN 下恒不动的 BN 仿射参数，相对位移被稀释）")
 
-    verdict = displacement_verdict(tables["windows"], noise_floor)
+    verdict = displacement_verdict(window_rows, noise_floor)
     print("\n=== 判词 ===")
     for key, value in verdict.items():
         if key == "verdict":
             continue
-        print(f"  {key:<34} {value:.6g}" if isinstance(value, float)
-              else f"  {key:<34} {value}")
+        print(f"  {key:<38} {value:.6g}" if isinstance(value, float)
+              else f"  {key:<38} {value}")
     print(f"\n  {verdict['verdict']}")
+
+    walk = random_walk_check(window_rows)
+    if walk is not None:
+        print(f"\n=== 干净阶段的漂移：定向还是随机游走 ===")
+        print(f"  窗口 {walk['window']}，由 {walk['n_segments']} 段铺满")
+        print(f"  实测 ‖Δθ‖ {walk['observed_l2_delta']:.6g}  vs  "
+              f"各段正交时 {walk['quadrature_l2_delta']:.6g}  vs  "
+              f"完全同向时 {walk['linear_l2_delta']:.6g}")
+        print(f"  实测/正交 = {walk['observed_over_quadrature']:.4g}"
+              f"（同向/正交 = {walk['linear_over_quadrature']:.4g}）")
 
     summary_path = out_dir / "t0_verdict.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w", encoding="utf-8") as handle:
         json.dump({"run_id": run_id, "rounds": rounds, "windows": windows,
-                   "verdict": verdict,
+                   # 判词是从 checkpoint 现算的，还是从已有 CSV 重算的 ——
+                   # 两者数值一致，但来源要能查
+                   "source": (f"recomputed from {args.from_windows}"
+                              + (f" + {args.from_layers}"
+                                 if args.from_layers else "")
+                              if args.from_windows else "checkpoints"),
+                   "verdict": verdict, "random_walk": walk,
                    "noise_floor_relative_displacement": noise_floor},
                   handle, indent=2, ensure_ascii=False)
     print(f"\n[exp_t0] 判词 -> {summary_path}")
