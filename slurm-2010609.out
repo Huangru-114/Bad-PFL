@@ -1,0 +1,12 @@
+[dry-run] 6 个配方 × 4 个客户端（只良性） = 24 格
+  每一格 = 该客户端 test 分区上的一趟 ASR（PGD num_iter=1 + 生成器 + 前向）加一趟干净准确率；全体客户端每轮合计 1000 个样本。
+  读盘：客户端在外层循环 -> 每个 checkpoint **只读一次**（4 次），不是 24 次。
+  逐格写 results/t3_pilot/t3_raw.csv；被抢占后加 --resume 续跑。
+  zero                     m=0     seed=0 target_rel=0.0000
+  gaussian_global          m=1     seed=0 target_rel=0.1560
+  gaussian_layer_matched   m=1     seed=0 target_rel=0.1560
+  shuffled                 m=1     seed=0 target_rel=0.1560
+  sign_flipped             m=1     seed=0 target_rel=0.1560
+  real                     m=1     seed=0 target_rel=0.1560
+
+  加 --execute 真跑。

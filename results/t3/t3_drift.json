@@ -1,0 +1,7 @@
+{
+  "drift_window": "200->400",
+  "n_params_aggregated": 11164362,
+  "drift_relative_displacement": 0.15615098587465936,
+  "drift_l2": 6.7545796867218195,
+  "theta_l2": 43.2567213641779
+}

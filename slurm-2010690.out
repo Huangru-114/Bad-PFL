@@ -1,0 +1,59 @@
+[dry-run] 53 个配方 × 36 个客户端（只良性） = 1908 格
+  每一格 = 该客户端 test 分区上的一趟 ASR（PGD num_iter=1 + 生成器 + 前向）加一趟干净准确率；全体客户端每轮合计 9000 个样本。
+  读盘：客户端在外层循环 -> 每个 checkpoint **只读一次**（36 次），不是 1908 次。
+  逐格写 results/t3/t3_raw.csv；被抢占后加 --resume 续跑。
+  zero                     m=0     seed=0 target_rel=0.0000
+  gaussian_global          m=0.5   seed=0 target_rel=0.0780
+  gaussian_global          m=0.5   seed=1 target_rel=0.0780
+  gaussian_global          m=0.5   seed=2 target_rel=0.0780
+  gaussian_global          m=1     seed=0 target_rel=0.1560
+  gaussian_global          m=1     seed=1 target_rel=0.1560
+  gaussian_global          m=1     seed=2 target_rel=0.1560
+  gaussian_global          m=2     seed=0 target_rel=0.3120
+  gaussian_global          m=2     seed=1 target_rel=0.3120
+  gaussian_global          m=2     seed=2 target_rel=0.3120
+  gaussian_global          m=4     seed=0 target_rel=0.6240
+  gaussian_global          m=4     seed=1 target_rel=0.6240
+  gaussian_global          m=4     seed=2 target_rel=0.6240
+  gaussian_layer_matched   m=0.5   seed=0 target_rel=0.0780
+  gaussian_layer_matched   m=0.5   seed=1 target_rel=0.0780
+  gaussian_layer_matched   m=0.5   seed=2 target_rel=0.0780
+  gaussian_layer_matched   m=1     seed=0 target_rel=0.1560
+  gaussian_layer_matched   m=1     seed=1 target_rel=0.1560
+  gaussian_layer_matched   m=1     seed=2 target_rel=0.1560
+  gaussian_layer_matched   m=2     seed=0 target_rel=0.3120
+  gaussian_layer_matched   m=2     seed=1 target_rel=0.3120
+  gaussian_layer_matched   m=2     seed=2 target_rel=0.3120
+  gaussian_layer_matched   m=4     seed=0 target_rel=0.6240
+  gaussian_layer_matched   m=4     seed=1 target_rel=0.6240
+  gaussian_layer_matched   m=4     seed=2 target_rel=0.6240
+  shuffled                 m=0.5   seed=0 target_rel=0.0780
+  shuffled                 m=0.5   seed=1 target_rel=0.0780
+  shuffled                 m=0.5   seed=2 target_rel=0.0780
+  shuffled                 m=1     seed=0 target_rel=0.1560
+  shuffled                 m=1     seed=1 target_rel=0.1560
+  shuffled                 m=1     seed=2 target_rel=0.1560
+  shuffled                 m=2     seed=0 target_rel=0.3120
+  shuffled                 m=2     seed=1 target_rel=0.3120
+  shuffled                 m=2     seed=2 target_rel=0.3120
+  shuffled                 m=4     seed=0 target_rel=0.6240
+  shuffled                 m=4     seed=1 target_rel=0.6240
+  shuffled                 m=4     seed=2 target_rel=0.6240
+  sign_flipped             m=0.5   seed=0 target_rel=0.0780
+  sign_flipped             m=0.5   seed=1 target_rel=0.0780
+  sign_flipped             m=0.5   seed=2 target_rel=0.0780
+  sign_flipped             m=1     seed=0 target_rel=0.1560
+  sign_flipped             m=1     seed=1 target_rel=0.1560
+  sign_flipped             m=1     seed=2 target_rel=0.1560
+  sign_flipped             m=2     seed=0 target_rel=0.3120
+  sign_flipped             m=2     seed=1 target_rel=0.3120
+  sign_flipped             m=2     seed=2 target_rel=0.3120
+  sign_flipped             m=4     seed=0 target_rel=0.6240
+  sign_flipped             m=4     seed=1 target_rel=0.6240
+  sign_flipped             m=4     seed=2 target_rel=0.6240
+  real                     m=0.5   seed=0 target_rel=0.0780
+  real                     m=1     seed=0 target_rel=0.1560
+  real                     m=2     seed=0 target_rel=0.3120
+  real                     m=4     seed=0 target_rel=0.6240
+
+  加 --execute 真跑。

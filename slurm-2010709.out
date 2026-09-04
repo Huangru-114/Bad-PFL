@@ -1,0 +1,109 @@
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/exp_t3.py:586: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  generator.load_state_dict(torch.load(ckpt_dir / "generator.pt",
+[exp_t3] client 0 完成 53 个格子 （1/36 个客户端，共 1908 格）
+[exp_t3] client 1 完成 53 个格子 （2/36 个客户端，共 1908 格）
+[exp_t3] client 2 完成 53 个格子 （3/36 个客户端，共 1908 格）
+[exp_t3] client 3 完成 53 个格子 （4/36 个客户端，共 1908 格）
+[exp_t3] client 4 完成 53 个格子 （5/36 个客户端，共 1908 格）
+[exp_t3] client 5 完成 53 个格子 （6/36 个客户端，共 1908 格）
+[exp_t3] client 7 完成 53 个格子 （7/36 个客户端，共 1908 格）
+[exp_t3] client 8 完成 53 个格子 （8/36 个客户端，共 1908 格）
+[exp_t3] client 9 完成 53 个格子 （9/36 个客户端，共 1908 格）
+[exp_t3] client 10 完成 53 个格子 （10/36 个客户端，共 1908 格）
+[exp_t3] client 11 完成 53 个格子 （11/36 个客户端，共 1908 格）
+[exp_t3] client 12 完成 53 个格子 （12/36 个客户端，共 1908 格）
+[exp_t3] client 13 完成 53 个格子 （13/36 个客户端，共 1908 格）
+[exp_t3] client 14 完成 53 个格子 （14/36 个客户端，共 1908 格）
+[exp_t3] client 16 完成 53 个格子 （15/36 个客户端，共 1908 格）
+[exp_t3] client 18 完成 53 个格子 （16/36 个客户端，共 1908 格）
+[exp_t3] client 19 完成 53 个格子 （17/36 个客户端，共 1908 格）
+[exp_t3] client 20 完成 53 个格子 （18/36 个客户端，共 1908 格）
+[exp_t3] client 21 完成 53 个格子 （19/36 个客户端，共 1908 格）
+[exp_t3] client 22 完成 53 个格子 （20/36 个客户端，共 1908 格）
+[exp_t3] client 23 完成 53 个格子 （21/36 个客户端，共 1908 格）
+[exp_t3] client 24 完成 53 个格子 （22/36 个客户端，共 1908 格）
+[exp_t3] client 25 完成 53 个格子 （23/36 个客户端，共 1908 格）
+[exp_t3] client 27 完成 53 个格子 （24/36 个客户端，共 1908 格）
+[exp_t3] client 28 完成 53 个格子 （25/36 个客户端，共 1908 格）
+[exp_t3] client 29 完成 53 个格子 （26/36 个客户端，共 1908 格）
+[exp_t3] client 30 完成 53 个格子 （27/36 个客户端，共 1908 格）
+[exp_t3] client 31 完成 53 个格子 （28/36 个客户端，共 1908 格）
+[exp_t3] client 32 完成 53 个格子 （29/36 个客户端，共 1908 格）
+[exp_t3] client 33 完成 53 个格子 （30/36 个客户端，共 1908 格）
+[exp_t3] client 34 完成 53 个格子 （31/36 个客户端，共 1908 格）
+[exp_t3] client 35 完成 53 个格子 （32/36 个客户端，共 1908 格）
+[exp_t3] client 36 完成 53 个格子 （33/36 个客户端，共 1908 格）
+[exp_t3] client 37 完成 53 个格子 （34/36 个客户端，共 1908 格）
+[exp_t3] client 38 完成 53 个格子 （35/36 个客户端，共 1908 格）
+[exp_t3] client 39 完成 53 个格子 （36/36 个客户端，共 1908 格）
+
+[exp_t3] 53 个配方（逐格原始行在 results/t3/t3_raw.csv）-> results/t3/t3_results.csv
+  family                    mult seed      ASR      ACC    n
+  zero                         0    0   0.3637   0.8242   36
+  gaussian_global            0.5    0   0.3742   0.8247   36
+  gaussian_global            0.5    1   0.3620   0.8249   36
+  gaussian_global            0.5    2   0.3637   0.8246   36
+  gaussian_layer_matched     0.5    0   0.3737   0.8210   36
+  gaussian_layer_matched     0.5    1   0.3798   0.8239   36
+  gaussian_layer_matched     0.5    2   0.3725   0.8222   36
+  real                       0.5    0   0.0553   0.7772   36
+  shuffled                   0.5    0   0.3207   0.8138   36
+  shuffled                   0.5    1   0.3062   0.8181   36
+  shuffled                   0.5    2   0.3236   0.8166   36
+  sign_flipped               0.5    0   0.3787   0.8214   36
+  sign_flipped               0.5    1   0.3520   0.8224   36
+  sign_flipped               0.5    2   0.3492   0.8236   36
+  gaussian_global              1    0   0.3880   0.8226   36
+  gaussian_global              1    1   0.3604   0.8217   36
+  gaussian_global              1    2   0.3691   0.8223   36
+  gaussian_layer_matched       1    0   0.3889   0.8101   36
+  gaussian_layer_matched       1    1   0.3883   0.8196   36
+  gaussian_layer_matched       1    2   0.3839   0.8182   36
+  real                         1    0   0.0057   0.6628   36
+  shuffled                     1    0   0.2507   0.7682   36
+  shuffled                     1    1   0.2280   0.7829   36
+  shuffled                     1    2   0.2598   0.7717   36
+  sign_flipped                 1    0   0.4014   0.8110   36
+  sign_flipped                 1    1   0.3389   0.8180   36
+  sign_flipped                 1    2   0.3250   0.8160   36
+  gaussian_global              2    0   0.4105   0.8054   36
+  gaussian_global              2    1   0.3411   0.8112   36
+  gaussian_global              2    2   0.3668   0.8148   36
+  gaussian_layer_matched       2    0   0.4381   0.7614   36
+  gaussian_layer_matched       2    1   0.3923   0.7929   36
+  gaussian_layer_matched       2    2   0.3739   0.7819   36
+  real                         2    0   0.0006   0.3600   36
+  shuffled                     2    0   0.0937   0.5073   36
+  shuffled                     2    1   0.1039   0.6227   36
+  shuffled                     2    2   0.1317   0.5740   36
+  sign_flipped                 2    0   0.4458   0.7584   36
+  sign_flipped                 2    1   0.3169   0.7846   36
+  sign_flipped                 2    2   0.2609   0.7862   36
+  gaussian_global              4    0   0.4090   0.7150   36
+  gaussian_global              4    1   0.2069   0.7321   36
+  gaussian_global              4    2   0.3085   0.7526   36
+  gaussian_layer_matched       4    0   0.4267   0.4523   36
+  gaussian_layer_matched       4    1   0.1883   0.6082   36
+  gaussian_layer_matched       4    2   0.2480   0.5622   36
+  real                         4    0   0.0000   0.1147   36
+  shuffled                     4    0   0.0001   0.1727   36
+  shuffled                     4    1   0.0163   0.2408   36
+  shuffled                     4    2   0.0283   0.2170   36
+  sign_flipped                 4    0   0.2401   0.3787   36
+  sign_flipped                 4    1   0.2687   0.5366   36
+  sign_flipped                 4    2   0.1009   0.4564   36
+
+=== 判词 ===
+  n_cells                            53
+  acc_guard                          0.05
+  baseline_acc                       0.824222
+  baseline_asr                       0.363685
+  largest_usable_multiplier          0.5
+  asr_random_at_largest_usable       0.354701
+  asr_retained_fraction              0.975296
+  m=0.5   ACC 最多掉 0.0470（可读）  随机方向 ASR 均值 0.3547
+  m=1     ACC 最多掉 0.1614（ACC 已坏，ASR 不可读）  随机方向 ASR 均值 0.3402
+  m=2     ACC 最多掉 0.4642（ACC 已坏，ASR 不可读）  随机方向 ASR 均值 0.3063
+  m=4     ACC 最多掉 0.7096（ACC 已坏，ASR 不可读）  随机方向 ASR 均值 0.2035
+
+  **宽盆**：在 ACC 还站得住的最大幅度（multiplier 0.5，ACC 最多掉 0.047）上，随机方向扰动后 ASR 仍有 0.3547，是基线 0.3637 的 98%。地板不挂在特定参数值上 —— 这是 (c) 函数平坦的正面证据，并且意味着**参数空间的定点操作（剪枝/掩码/占位）原理上够不到它**。

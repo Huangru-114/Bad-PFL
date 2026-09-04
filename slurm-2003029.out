@@ -1,0 +1,79 @@
+[exp_t3] 53 个配方 -> results/t3/t3_manifest.csv
+
+=== 漂移基准（200->400，aggregated 口径）===
+  实测相对位移 0.156151（命令行给的基准 0.156）
+
+=== 标定自检 ===
+  family                    mult seed   target  achieved  cos(real)  layer dev
+  zero                         0    0   0.0000    0.0000        nan        nan
+  gaussian_global            0.5    0   0.0780    0.0780     0.0001     2.8024
+  gaussian_global            0.5    1   0.0780    0.0780    -0.0000     2.8051
+  gaussian_global            0.5    2   0.0780    0.0780     0.0005     2.8004
+  gaussian_global              1    0   0.1560    0.1560     0.0001     2.8024
+  gaussian_global              1    1   0.1560    0.1560    -0.0000     2.8051
+  gaussian_global              1    2   0.1560    0.1560     0.0005     2.8004
+  gaussian_global              2    0   0.3120    0.3120     0.0001     2.8024
+  gaussian_global              2    1   0.3120    0.3120    -0.0000     2.8051
+  gaussian_global              2    2   0.3120    0.3120     0.0005     2.8004
+  gaussian_global              4    0   0.6240    0.6240     0.0001     2.8024
+  gaussian_global              4    1   0.6240    0.6240    -0.0000     2.8051
+  gaussian_global              4    2   0.6240    0.6240     0.0005     2.8004
+  gaussian_layer_matched     0.5    0   0.0780    0.0780     0.0007     0.0000
+  gaussian_layer_matched     0.5    1   0.0780    0.0780     0.0005     0.0000
+  gaussian_layer_matched     0.5    2   0.0780    0.0780     0.0013     0.0000
+  gaussian_layer_matched       1    0   0.1560    0.1560     0.0007     0.0000
+  gaussian_layer_matched       1    1   0.1560    0.1560     0.0005     0.0000
+  gaussian_layer_matched       1    2   0.1560    0.1560     0.0013     0.0000
+  gaussian_layer_matched       2    0   0.3120    0.3120     0.0007     0.0000
+  gaussian_layer_matched       2    1   0.3120    0.3120     0.0005     0.0000
+  gaussian_layer_matched       2    2   0.3120    0.3120     0.0013     0.0000
+  gaussian_layer_matched       4    0   0.6240    0.6240     0.0007     0.0000
+  gaussian_layer_matched       4    1   0.6240    0.6240     0.0005     0.0000
+  gaussian_layer_matched       4    2   0.6240    0.6240     0.0013     0.0000
+  shuffled                   0.5    0   0.0780    0.0780     0.0007     0.0000
+  shuffled                   0.5    1   0.0780    0.0780     0.0016     0.0000
+  shuffled                   0.5    2   0.0780    0.0780     0.0009     0.0000
+  shuffled                     1    0   0.1560    0.1560     0.0007     0.0000
+  shuffled                     1    1   0.1560    0.1560     0.0016     0.0000
+  shuffled                     1    2   0.1560    0.1560     0.0009     0.0000
+  shuffled                     2    0   0.3120    0.3120     0.0007     0.0000
+  shuffled                     2    1   0.3120    0.3120     0.0016     0.0000
+  shuffled                     2    2   0.3120    0.3120     0.0009     0.0000
+  shuffled                     4    0   0.6240    0.6240     0.0007     0.0000
+  shuffled                     4    1   0.6240    0.6240     0.0016     0.0000
+  shuffled                     4    2   0.6240    0.6240     0.0009     0.0000
+  sign_flipped               0.5    0   0.0780    0.0780    -0.0009     0.0000
+  sign_flipped               0.5    1   0.0780    0.0780     0.0010     0.0000
+  sign_flipped               0.5    2   0.0780    0.0780     0.0005     0.0000
+  sign_flipped                 1    0   0.1560    0.1560    -0.0009     0.0000
+  sign_flipped                 1    1   0.1560    0.1560     0.0010     0.0000
+  sign_flipped                 1    2   0.1560    0.1560     0.0005     0.0000
+  sign_flipped                 2    0   0.3120    0.3120    -0.0009     0.0000
+  sign_flipped                 2    1   0.3120    0.3120     0.0010     0.0000
+  sign_flipped                 2    2   0.3120    0.3120     0.0005     0.0000
+  sign_flipped                 4    0   0.6240    0.6240    -0.0009     0.0000
+  sign_flipped                 4    1   0.6240    0.6240     0.0010     0.0000
+  sign_flipped                 4    2   0.6240    0.6240     0.0005     0.0000
+  real                       0.5    0   0.0780    0.0780     1.0000     0.0000
+  real                         1    0   0.1560    0.1560     1.0000     0.0000
+  real                         2    0   0.3120    0.3120     1.0000     0.0000
+  real                         4    0   0.6240    0.6240     1.0000     0.0000
+
+  自检要点：achieved 必须等于 target；`real` 的 cos(real) 必须是 1；
+  `gaussian_layer_matched` 的 layer dev 必须 ≈ 0，而 `gaussian_global` 不会 —— 那正是两者的区别。
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/exp_t3.py", line 626, in <module>
+    raise SystemExit(main())
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/exp_t3.py", line 600, in main
+    rows = evaluate_recipes(args.ckpt_dir, recipes, args.drift_from,
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/exp_t3.py", line 449, in evaluate_recipes
+    meta = json.loads((ckpt_dir / "meta.json").read_text())
+  File "/usr/lib/python3.10/pathlib.py", line 1134, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+  File "/usr/lib/python3.10/pathlib.py", line 1119, in open
+    return self._accessor.open(self, mode, buffering, encoding, errors,
+FileNotFoundError: [Errno 2] No such file or directory: '.../meta.json'
