@@ -19,6 +19,7 @@ T3 的全部说服力挂在**标定对不对**上：如果"随机方向、同幅
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 from pathlib import Path
 
@@ -26,9 +27,11 @@ import numpy as np
 
 from diag import paramspace as ps
 from diag.exp_t3 import (ACC_GUARD, DEFAULT_MULTIPLIERS, FAMILIES,
-                         apply_perturbation, build_recipes, calibrate,
-                         flatness_verdict, main, make_direction,
-                         perturbation_profile, scale_to_relative)
+                         aggregate_results, append_row, apply_perturbation,
+                         build_recipes, calibrate, eval_clients,
+                         flatness_verdict, load_done_keys, load_raw_rows, main,
+                         make_direction, missing_eval_inputs,
+                         perturbation_profile, recipe_key, scale_to_relative)
 
 
 def _index_and_vectors():
@@ -378,14 +381,136 @@ def test_build_mode_runs_end_to_end_and_the_self_checks_hold():
                             ["cos_with_real_drift"]), 1.0)
 
 
+def _add_eval_inputs(root: Path, n_benign: int = 2, n_malicious: int = 1):
+    """补上 eval 那一侧要的东西：meta.json + generator.pt + client_<cid>.pt。
+
+    内容不重要（这些测试不跑 torch），存在性才重要 —— 被检查的正是"缺没缺"。
+    """
+    clients = []
+    for cid in range(n_benign + n_malicious):
+        (root / f"client_{cid}.pt").write_text("stub", encoding="utf-8")
+        clients.append({"client_id": cid, "is_malicious": cid >= n_benign,
+                        "test_indices": [cid, cid + 1, cid + 2]})
+    (root / "generator.pt").write_text("stub", encoding="utf-8")
+    (root / "meta.json").write_text(
+        json.dumps({"target_class": 0, "num_classes": 10, "clients": clients}),
+        encoding="utf-8")
+    return root
+
+
 def test_eval_dry_run_lists_recipes_without_touching_torch():
     """dry-run 要能在没有 torch / 没有数据的机器上跑，否则没法先看格子数。"""
     with tempfile.TemporaryDirectory() as tmp:
-        root = _write_run(Path(tmp) / "run", drift=0.1)
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1))
         assert main(["--mode", "eval", "--ckpt-dir", str(root),
                      "--multipliers", "1", "--seeds", "0",
                      "--out-dir", str(Path(tmp) / "out")]) == 0
         assert not (Path(tmp) / "out" / "t3_results.csv").exists()
+
+
+def test_eval_dry_run_reports_every_missing_input_at_once():
+    """缺文件要在排队**之前**一次报齐，而不是 GPU 作业跑两小时后死在第一个上。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _write_run(Path(tmp) / "run", drift=0.1)   # 只有 global 快照
+        assert main(["--mode", "eval", "--ckpt-dir", str(root),
+                     "--out-dir", str(Path(tmp) / "out")]) == 1
+        missing = missing_eval_inputs(root, 200, 400)
+    assert any(path.endswith("meta.json") for path in missing)
+    assert any(path.endswith("generator.pt") for path in missing)
+
+
+def test_missing_eval_inputs_finds_absent_client_checkpoints():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1))
+        assert missing_eval_inputs(root, 200, 400) == []
+        (root / "client_1.pt").unlink()
+        missing = missing_eval_inputs(root, 200, 400)
+        assert len(missing) == 1 and missing[0].endswith("client_1.pt")
+        # 漂移两端的快照也在检查范围内
+        assert any(path.endswith("global.pt")
+                   for path in missing_eval_inputs(root, 200, 350))
+
+
+def test_eval_clients_filters_malicious_and_honours_max_clients():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1),
+                                n_benign=3, n_malicious=2)
+        benign = eval_clients(root, benign_only=True)
+        assert [int(r["client_id"]) for r in benign] == [0, 1, 2]
+        everyone = eval_clients(root, benign_only=False)
+        assert len(everyone) == 5
+        # max_clients 取编号最小的前 N 个 —— 确定性，不随机抽
+        assert [int(r["client_id"])
+                for r in eval_clients(root, True, max_clients=2)] == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# 逐格写盘与续跑
+# ---------------------------------------------------------------------------
+def test_append_row_writes_header_once_then_appends():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "sub" / "raw.csv"
+        append_row({"recipe_key": "real|1|0", "client_id": 3, "asr": 0.4}, path)
+        append_row({"recipe_key": "real|1|0", "client_id": 4, "asr": 0.5}, path)
+        rows = load_raw_rows(path)
+    assert len(rows) == 2
+    assert rows[1]["client_id"] == "4"
+
+
+def test_append_row_refuses_to_write_a_different_column_set():
+    """静默错位会把一张看似正常的表变成垃圾。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "raw.csv"
+        append_row({"a": 1, "b": 2}, path)
+        try:
+            append_row({"a": 1, "c": 3}, path)
+        except ValueError as error:
+            assert "表头" in str(error)
+        else:
+            raise AssertionError("列集合不一致时应当拒绝追加")
+
+
+def test_load_done_keys_round_trips_recipe_and_client():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "raw.csv"
+        append_row({"recipe_key": "shuffled|2|1", "client_id": 7, "asr": 0.3},
+                   path)
+        assert load_done_keys(path) == {("shuffled|2|1", 7)}
+        assert load_done_keys(Path(tmp) / "nope.csv") == set()
+
+
+def test_recipe_key_is_stable_across_int_and_float_multipliers():
+    assert recipe_key({"family": "real", "multiplier": 1, "seed": 0}) == \
+        recipe_key({"family": "real", "multiplier": 1.0, "seed": 0})
+
+
+# ---------------------------------------------------------------------------
+# 聚合
+# ---------------------------------------------------------------------------
+def test_aggregate_results_averages_clients_and_attaches_the_profile():
+    raw = [{"run_id": "r", "recipe_key": "real|1|0", "family": "real",
+            "multiplier": "1", "seed": "0", "target_relative": "0.156",
+            "client_id": "0", "asr_std_filtered": "0.40",
+            "asr_unfiltered": "0.42", "acc": "0.70"},
+           {"run_id": "r", "recipe_key": "real|1|0", "family": "real",
+            "multiplier": "1", "seed": "0", "target_relative": "0.156",
+            "client_id": "1", "asr_std_filtered": "0.50",
+            "asr_unfiltered": "0.52", "acc": "0.60"}]
+    rows = aggregate_results(raw, {"real|1|0": {"cos_with_real_drift": 1.0}})
+    assert len(rows) == 1
+    assert np.isclose(rows[0]["asr"], 0.45)
+    assert np.isclose(rows[0]["acc"], 0.65)
+    assert rows[0]["n_clients"] == 2
+    assert np.isclose(rows[0]["cos_with_real_drift"], 1.0)
+
+
+def test_aggregate_results_leaves_an_all_nan_recipe_as_nan():
+    """一个有效客户端都没有时记 nan，不填 0（铁律 5）。"""
+    raw = [{"recipe_key": "k", "family": "real", "multiplier": "1", "seed": "0",
+            "target_relative": "0.1", "client_id": "0",
+            "asr_std_filtered": "nan", "asr_unfiltered": "nan", "acc": "nan"}]
+    rows = aggregate_results(raw, {})
+    assert np.isnan(rows[0]["asr"]) and np.isnan(rows[0]["acc"])
 
 
 def test_calibrate_reports_a_missing_snapshot():

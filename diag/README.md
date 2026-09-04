@@ -537,10 +537,39 @@ python -m diag.exp_t3 --mode build \
     --drift-from 200 --drift-to 400 --base-relative 0.156 \
     --out-dir results/t3
 
-# 2) GPU：先 dry-run 看格子数，确认后加 --execute
-python -m diag.exp_t3 --mode eval --ckpt-dir ... --out-dir results/t3
-python -m diag.exp_t3 --mode eval --ckpt-dir ... --out-dir results/t3 --execute
+# 2) GPU dry-run：查缺文件 + 报格子数，**不需要 GPU 也能跑**
+python -m diag.exp_t3 --mode eval \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --data-root ./data --model-size 18 --device 0 \
+    --out-dir results/t3
+
+# 3) 先小规模试水（4 个客户端 × 只 multiplier=1），确认 zero 格复现基线 ASR
+python -m diag.exp_t3 --mode eval \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --data-root ./data --model-size 18 --device 0 \
+    --multipliers 1 --seeds 0 --max-clients 4 \
+    --out-dir results/t3_pilot --execute
+
+# 4) 全量（53 个配方 × 全部良性客户端）
+python -m diag.exp_t3 --mode eval \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --data-root ./data --model-size 18 --device 0 \
+    --out-dir results/t3 --execute
+# 被抢占后原样重跑并加 --resume，已算过的格子会跳过
 ```
+
+`--model-size 18`（B2 是 ResNet-18，对应 `config.yaml` 的 `exp1.model_size`）、
+`--data-root`（CIFAR-10 测试集，`download=False`）、`--device`（`0` 表示 `cuda:0`，
+`cpu` 表示 CPU）这三个**必须按你的环境给全**，缺省值不一定对。
+
+`--mode eval` **不加 `--execute` 时不导入 torch**，所以本机也能先查一遍缺什么文件：
+它会把 `meta.json` / `generator.pt` / 每个 `client_<cid>.pt` / 漂移两端的
+`round_XXXX/global.pt` 一次报齐（返回码 1），而不是让 GPU 作业排队两小时后死在
+第一个缺失的文件上。注意 `client_*.pt` 与 `meta.json` 在 run 的**根目录**
+（`hooks.save_run` 写的），不在 `round_XXXX/` 下。
 
 六个方向族：`zero`（自检锚点）/ `gaussian_global` / `gaussian_layer_matched`
 （主对照：同幅度、同逐层剖面、方向随机）/ `shuffled`（层内置换坐标）/
@@ -561,6 +590,15 @@ python -m diag.exp_t3 --mode eval --ckpt-dir ... --out-dir results/t3 --execute
 
 **配方不存扰动向量**（11M 坐标 × float32 ≈ 45MB 一份，六族×四幅度×三 seed 会到
 3GB），只存 `(族, seed, 目标幅度)`，用固定 seed 确定性重建；落盘的是**标定读数**。
+
+**循环是"客户端在外、配方在内"**：每个 checkpoint 只读一次（36 次而不是
+53×36=1908 次、约 86GB 的 I/O，在集群文件系统上那比 GPU 计算本身还贵）。
+代价是扰动向量按格重新生成，固定 seed 保证每次完全一样，一次约 0.2 秒。
+
+逐格结果实时追加进 `t3_raw.csv`（一行 = 一个 (配方, 客户端)），`t3_results.csv`
+是按配方聚合的。被抢占后加 `--resume` 续跑，已完成的格子会跳过；换了
+`--families` / `--multipliers` 就换个 `--raw-out`，别混写同一个文件（列集合不一致
+时会直接报错拒绝追加，不会静默错位）。
 
 ### 3.6 扫描矩阵（**默认 dry-run**）
 

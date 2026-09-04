@@ -37,12 +37,32 @@ B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前�
 （`diag/exp_t3.py`，设计见 `PLAN_T0T4.md §10`，用法见 `README §3.5f`）：
 
 ```bash
-# CPU：标定，不排队。先看自检三条对不对，再花机时
-python -m diag.exp_t3 --mode build --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
-    --base-relative 0.156 --out-dir results/t3
-# GPU：dry-run 看格子数 -> 加 --execute 真评
-python -m diag.exp_t3 --mode eval  --ckpt-dir ... --out-dir results/t3 --execute
+# 1) CPU：标定，不排队。先看自检三条对不对，再花机时  ✅ 已完成，自检正常
+python -m diag.exp_t3 --mode build \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 --out-dir results/t3
+
+# 2) dry-run：查缺文件 + 报格子数（不导入 torch，本机也能跑）
+python -m diag.exp_t3 --mode eval \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --data-root ./data --model-size 18 --device 0 --out-dir results/t3
+
+# 3) 小规模试水：确认 zero 格复现 B2 的基线 ASR，再上全量
+python -m diag.exp_t3 --mode eval ... --multipliers 1 --seeds 0 --max-clients 4 \
+    --out-dir results/t3_pilot --execute
+
+# 4) 全量 53 配方 × 全部良性客户端；被抢占后原样重跑加 --resume
+python -m diag.exp_t3 --mode eval \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --data-root ./data --model-size 18 --device 0 \
+    --out-dir results/t3 --execute
 ```
+
+`--model-size 18` / `--data-root` / `--device` **必须按环境给全**，缺省值不一定对。
+eval 需要 run **根目录**的 `meta.json` / `generator.pt` / `client_<cid>.pt`
+（`hooks.save_run` 写的）加漂移两端的 `round_XXXX/global.pt`；dry-run 会一次报齐缺哪些。
 
 问的是：同样 0.156 的幅度、换成**随机方向**，ASR 掉不掉？掉不动 = 宽盆 = (c)；
 掉得动 = 良性训练的漂移方向特殊。六个方向族把「幅度」「坐标身份」「方向相干性」

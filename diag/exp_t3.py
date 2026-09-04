@@ -60,6 +60,7 @@ T0 实测（`PLAN_T0T4.md §9`）：攻击停止后的 200 轮干净训练把**�
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -71,7 +72,10 @@ from .exp_t0 import AGGREGATED_KINDS, global_path, load_state, write_rows
 
 __all__ = ["FAMILIES", "ACC_GUARD", "make_direction", "scale_to_relative",
            "perturbation_profile", "build_recipes", "apply_perturbation",
-           "flatness_verdict", "main"]
+           "recipe_key", "load_drift", "calibrate", "eval_clients",
+           "missing_eval_inputs", "append_row", "load_raw_rows",
+           "load_done_keys",
+           "evaluate_recipes", "aggregate_results", "flatness_verdict", "main"]
 
 #: 方向族。顺序即报告顺序；``zero`` 放第一个，因为它是自检锚点。
 FAMILIES: Tuple[str, ...] = ("zero", "gaussian_global",
@@ -356,14 +360,19 @@ def flatness_verdict(rows: Sequence[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # CPU：标定
 # ---------------------------------------------------------------------------
-def calibrate(ckpt_dir, drift_from: int, drift_to: int,
-              recipes: Sequence[Dict[str, Any]]
-              ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """按配方造一遍扰动并测量它们，返回 ``(清单行, 漂移本身的读数)``。
+def recipe_key(recipe: Dict[str, Any]) -> str:
+    """配方的稳定标识：``族|幅度|seed``。用于断点续跑时比对已完成的格子。"""
+    return (f"{recipe['family']}|{float(recipe['multiplier']):g}"
+            f"|{int(recipe['seed'])}")
 
-    这一步的全部意义是**在花机时之前**确认标定对不对：achieved 与 target 应当
-    一致到浮点精度，`gaussian_layer_matched` 的逐层剖面偏差应当接近 0，
-    `real` 与真实漂移的 cos 应当恰好是 1。
+
+def load_drift(ckpt_dir, drift_from: int, drift_to: int
+               ) -> Tuple[np.ndarray, np.ndarray, ps.ParamIndex,
+                          Dict[str, Any]]:
+    """读两端全局快照，返回 ``aggregated`` 子空间上的 (θ, Δθ_real, 索引, 读数)。
+
+    `calibrate` 与 `evaluate_recipes` 共用这一段 —— 两边必须用**同一个**子空间
+    与同一条漂移，否则清单里标定过的幅度和真正加到模型上的幅度会悄悄不一致。
     """
     ckpt_dir = Path(ckpt_dir)
     paths = {}
@@ -389,7 +398,19 @@ def calibrate(ckpt_dir, drift_from: int, drift_to: int,
         "drift_l2": ps.l2(delta_real),
         "theta_l2": ps.l2(theta),
     }
+    return theta, delta_real, index, drift
 
+
+def calibrate(ckpt_dir, drift_from: int, drift_to: int,
+              recipes: Sequence[Dict[str, Any]]
+              ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """按配方造一遍扰动并测量它们，返回 ``(清单行, 漂移本身的读数)``。
+
+    这一步的全部意义是**在花机时之前**确认标定对不对：achieved 与 target 应当
+    一致到浮点精度，`gaussian_layer_matched` 的逐层剖面偏差应当接近 0，
+    `real` 与真实漂移的 cos 应当恰好是 1。
+    """
+    theta, delta_real, index, drift = load_drift(ckpt_dir, drift_from, drift_to)
     rows: List[Dict[str, Any]] = []
     for recipe in recipes:
         direction = make_direction(recipe["family"], delta_real, theta, index,
@@ -425,17 +446,128 @@ def _client_accuracy(model: Any, loader: Any, device: Any) -> Dict[str, float]:
             "n_acc_samples": int(total)}
 
 
+def eval_clients(ckpt_dir, benign_only: bool = True,
+                 max_clients: Optional[int] = None) -> List[Dict[str, Any]]:
+    """要评的客户端记录。``max_clients`` 取**编号最小的前 N 个**（确定性）。
+
+    默认只评良性客户端：恶意客户端的 ASR≈1.0，混进均值里会把地板抬起来，
+    而地板讲的是**受害者**模型上还剩多少。
+    """
+    meta = json.loads((Path(ckpt_dir) / "meta.json").read_text())
+    clients = sorted((record for record in meta["clients"]
+                      if record.get("test_indices")
+                      and not (benign_only and record["is_malicious"])),
+                     key=lambda record: int(record["client_id"]))
+    if not clients:
+        raise ValueError(
+            f"{ckpt_dir}/meta.json 里没有可评的客户端"
+            f"（缺 test_indices？benign_only={benign_only}）")
+    if max_clients is not None and max_clients > 0:
+        clients = clients[:int(max_clients)]
+    return clients
+
+
+def missing_eval_inputs(ckpt_dir, drift_from: int = 200, drift_to: int = 400,
+                        benign_only: bool = True,
+                        max_clients: Optional[int] = None) -> List[str]:
+    """``--mode eval`` 需要、但这个 run 目录里缺掉的东西。
+
+    dry-run 会先跑这一遍：**一次把缺的全报齐**，而不是让 GPU 作业排队两小时后
+    死在第一个缺失的文件上。检查四类：
+
+    - `meta.json`（客户端划分、target_class、test_indices）
+    - `generator.pt`（触发器生成器 —— ASR 口径要用原始触发器）
+    - 每个要评的客户端的 `client_<cid>.pt`（在 run 根目录，不是 round_XXXX/ 下）
+    - 漂移两端的全局快照 `round_XXXX/global.pt`（幅度基准从这里来）
+    """
+    ckpt_dir = Path(ckpt_dir)
+    missing: List[str] = []
+    for name in ("meta.json", "generator.pt"):
+        if not (ckpt_dir / name).exists():
+            missing.append(str(ckpt_dir / name))
+    for round_index in (drift_from, drift_to):
+        if global_path(ckpt_dir, round_index) is None:
+            missing.append(str(ckpt_dir / f"round_{round_index:04d}"
+                               / "global.pt"))
+    if (ckpt_dir / "meta.json").exists():
+        for record in eval_clients(ckpt_dir, benign_only, max_clients):
+            path = ckpt_dir / f"client_{int(record['client_id'])}.pt"
+            if not path.exists():
+                missing.append(str(path))
+    return missing
+
+
+def append_row(row: Dict[str, Any], path) -> Path:
+    """把一行追加进 CSV（文件不存在时先写表头）。
+
+    逐格写盘是为了让作业被抢占时**已经算过的不白算**。表头与行的键集合不一致时
+    直接报错 —— 静默错位会把一张看似正常的表变成垃圾。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = list(row.keys())
+    if path.exists():
+        with open(path, encoding="utf-8", newline="") as handle:
+            existing = next(csv.reader(handle), None)
+        if existing is not None and existing != fields:
+            raise ValueError(
+                f"{path} 已有的表头与本次要写的列不一致，拒绝追加：\n"
+                f"  已有：{existing}\n  本次：{fields}\n"
+                f"（换了 --families/--multipliers 就换个 --raw-out，别混写一个文件）")
+        with open(path, "a", encoding="utf-8", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=fields).writerow(row)
+    else:
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow(row)
+    return path
+
+
+def load_raw_rows(raw_path) -> List[Dict[str, Any]]:
+    """读回逐格原始行（续跑后要把旧行与新行一起聚合）。"""
+    raw_path = Path(raw_path)
+    if not raw_path.exists():
+        return []
+    with open(raw_path, encoding="utf-8") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def load_done_keys(raw_path) -> set:
+    """已完成的 ``(配方, 客户端)`` 格子 —— 断点续跑用。
+
+    多小时的 GPU 作业被抢占是常态，重头再来一遍是纯浪费。逐格写盘 + 这个集合
+    就够了：**不猜、不合并**，只跳过 raw CSV 里已经有的那些格子。
+    """
+    raw_path = Path(raw_path)
+    if not raw_path.exists():
+        return set()
+    with open(raw_path, encoding="utf-8") as handle:
+        return {(row["recipe_key"], int(row["client_id"]))
+                for row in csv.DictReader(handle)
+                if row.get("recipe_key") and row.get("client_id")}
+
+
 def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
                      drift_from: int, drift_to: int, test_dataset: Any, *,
                      model_size: int, device: Any, batch_size: int = 128,
-                     benign_only: bool = True) -> List[Dict[str, Any]]:
-    """对每个配方，把扰动加到**每个客户端自己的最终个性化模型**上，评 ASR + ACC。
+                     benign_only: bool = True,
+                     max_clients: Optional[int] = None,
+                     raw_path=None, resume: bool = False
+                     ) -> List[Dict[str, Any]]:
+    """把扰动加到**每个客户端自己的最终个性化模型**上，评 ASR + ACC，返回逐格的原始行。
 
     - 扰动只加在 ``aggregated`` 参数上，客户端自己的 BN 原样保留（FedBN）。
     - ASR 用 `recompute_asr_final.client_asr` 的**原始触发器**口径，
-      与 B2 那条 0.4133 的曲线可比。
-    - 默认只评良性客户端（``benign_only``）：恶意客户端的 ASR≈1.0，混进均值里
-      会把地板抬起来，而地板讲的是**受害者**模型上还剩多少。
+      与 B2 那条 0.4133 的曲线可比；ACC 是同一 loader 上的干净准确率。
+
+    **循环是"客户端在外、配方在内"**：每个 checkpoint 只从盘上读一次。反过来写
+    （配方在外）会让 53 个配方 × 36 个客户端 = 1908 次读盘、约 86GB 的 I/O，
+    在集群文件系统上这比 GPU 计算本身还贵。代价是扰动向量要按 (客户端, 配方)
+    重新生成 —— 固定 seed 保证每次生成的完全一样，一次约 0.2 秒，总共几分钟，
+    比 86GB 的读便宜得多。
+
+    ``raw_path`` 给了就**逐格追加写盘**，配合 ``resume`` 可以断点续跑。
     """
     import torch
     from torch.utils.data import DataLoader, Subset
@@ -455,65 +587,91 @@ def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
                                          map_location=device))
     generator.device = device
 
-    # 扰动向量由「全局快照的漂移」定义，与客户端无关 —— 一次算好，全体客户端共用。
-    theta_all, delta_all, index_all = ps.displacement(
-        load_state(global_path(ckpt_dir, drift_from)),
-        load_state(global_path(ckpt_dir, drift_to)))
-    mask = index_all.kind_mask(AGGREGATED_KINDS)
-    index = ps.subset_index(index_all, mask)
-    theta, delta_real = theta_all[mask], delta_all[mask]
-
-    clients = [record for record in meta["clients"]
-               if record.get("test_indices")
-               and not (benign_only and record["is_malicious"])]
-    if not clients:
-        raise ValueError("meta.json 里没有可评的客户端（缺 test_indices？）")
+    # 扰动由「全局快照的漂移」定义，与客户端无关；索引/子空间与 calibrate 共用
+    theta, delta_real, index, _ = load_drift(ckpt_dir, drift_from, drift_to)
+    clients = eval_clients(ckpt_dir, benign_only, max_clients)
+    done = load_done_keys(raw_path) if (resume and raw_path) else set()
+    if done:
+        print(f"[exp_t3] 续跑：raw CSV 里已有 {len(done)} 个格子，跳过它们")
 
     rows: List[Dict[str, Any]] = []
-    for recipe in recipes:
-        direction = make_direction(recipe["family"], delta_real, theta, index,
-                                   recipe["seed"])
-        vector = scale_to_relative(direction, theta, recipe["target_relative"])
-        profile = perturbation_profile(vector, theta, delta_real, index)
+    total = len(clients) * len(recipes)
+    for position, record in enumerate(clients, start=1):
+        cid = int(record["client_id"])
+        pending = [r for r in recipes if (recipe_key(r), cid) not in done]
+        if not pending:
+            print(f"[exp_t3] client {cid} 全部格子已完成，跳过")
+            continue
 
-        per_client: List[Dict[str, float]] = []
-        for record in clients:
-            cid = int(record["client_id"])
-            model = load_client_model(ckpt_dir / f"client_{cid}.pt",
-                                      lambda: get_resnet(size=int(model_size),
-                                                         num_classes=num_classes),
-                                      device)
-            state = {key: value.detach().cpu().numpy()
-                     for key, value in model.state_dict().items()}
-            perturbed = apply_perturbation(state, vector, index)
+        model = load_client_model(
+            ckpt_dir / f"client_{cid}.pt",
+            lambda: get_resnet(size=int(model_size), num_classes=num_classes),
+            device)
+        base_state = {key: value.detach().cpu().numpy().copy()
+                      for key, value in model.state_dict().items()}
+        loader = DataLoader(Subset(test_dataset, list(record["test_indices"])),
+                            batch_size=batch_size)
+
+        for recipe in pending:
+            direction = make_direction(recipe["family"], delta_real, theta,
+                                       index, recipe["seed"])
+            vector = scale_to_relative(direction, theta,
+                                       recipe["target_relative"])
+            perturbed = apply_perturbation(base_state, vector, index)
             model.load_state_dict({key: torch.as_tensor(value)
                                    for key, value in perturbed.items()})
             model.to(device)
 
-            loader = DataLoader(Subset(test_dataset, list(record["test_indices"])),
-                                batch_size=batch_size)
             asr = client_asr(model, generator, loader, target_class, device)
             accuracy = _client_accuracy(model, loader, device)
-            per_client.append({"client_id": cid, **asr, **accuracy})
-            del model
-
-        def _mean(key: str) -> float:
-            values = [row[key] for row in per_client
-                      if np.isfinite(float(row[key]))]
-            return float(np.mean(values)) if values else float("nan")
-
-        rows.append({
-            "run_id": ckpt_dir.name, **recipe, **profile,
-            "n_clients": len(per_client),
-            "asr": _mean("asr_std_filtered"),
-            "asr_unfiltered": _mean("asr_unfiltered"),
-            "acc": _mean("acc"),
-        })
-        print(f"[exp_t3] {recipe['family']:<24} m={recipe['multiplier']:<4g} "
-              f"seed={recipe['seed']}  ASR={rows[-1]['asr']:.4f}  "
-              f"ACC={rows[-1]['acc']:.4f}  "
-              f"(rel={profile['achieved_relative_displacement']:.4f})")
+            row = {"run_id": ckpt_dir.name, "recipe_key": recipe_key(recipe),
+                   **recipe, "client_id": cid,
+                   "is_malicious": bool(record["is_malicious"]), **asr,
+                   **accuracy}
+            rows.append(row)
+            if raw_path is not None:
+                append_row(row, raw_path)
+        del model
+        print(f"[exp_t3] client {cid} 完成 {len(pending)} 个格子 "
+              f"（{position}/{len(clients)} 个客户端，共 {total} 格）")
     return rows
+
+
+def aggregate_results(raw_rows: Sequence[Dict[str, Any]],
+                      profiles: Dict[str, Dict[str, Any]]
+                      ) -> List[Dict[str, Any]]:
+    """把逐 (配方, 客户端) 的原始行聚合成逐配方一行，并带上标定读数。
+
+    只对**有限值**求均值；某个配方一个有效客户端都没有时记 nan（不填 0，
+    遵"无定义留空"铁律）。
+    """
+    by_recipe: Dict[str, List[Dict[str, Any]]] = {}
+    for row in raw_rows:
+        by_recipe.setdefault(str(row["recipe_key"]), []).append(row)
+
+    def _mean(block: Sequence[Dict[str, Any]], key: str) -> float:
+        values = [float(row[key]) for row in block
+                  if row.get(key) not in (None, "")
+                  and np.isfinite(float(row[key]))]
+        return float(np.mean(values)) if values else float("nan")
+
+    out: List[Dict[str, Any]] = []
+    for key, block in by_recipe.items():
+        first = block[0]
+        out.append({
+            "run_id": first.get("run_id", ""), "recipe_key": key,
+            "family": first["family"],
+            "multiplier": float(first["multiplier"]),
+            "seed": int(first["seed"]),
+            "target_relative": float(first["target_relative"]),
+            **profiles.get(key, {}),
+            "n_clients": len(block),
+            "asr": _mean(block, "asr_std_filtered"),
+            "asr_unfiltered": _mean(block, "asr_unfiltered"),
+            "acc": _mean(block, "acc"),
+        })
+    return sorted(out, key=lambda row: (row["multiplier"], row["family"],
+                                        row["seed"]))
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +697,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--device", default="0")
     parser.add_argument("--include-malicious", action="store_true",
                         help="也评恶意客户端（默认只评良性 —— 地板讲的是受害者）")
+    parser.add_argument("--max-clients", type=int, default=None,
+                        help="只评编号最小的前 N 个客户端（先跑小规模试水用）")
+    parser.add_argument("--raw-out", default="",
+                        help="逐 (配方, 客户端) 的原始行 CSV，"
+                             "缺省 <out-dir>/t3_raw.csv")
+    parser.add_argument("--resume", action="store_true",
+                        help="跳过 raw CSV 里已完成的格子（作业被抢占后续跑）")
     parser.add_argument("--execute", action="store_true",
                         help="eval 模式真跑；缺省只打印格子数与预估")
     args = parser.parse_args(argv)
@@ -578,13 +743,43 @@ def main(argv: Optional[List[str]] = None) -> int:
             json.dump(drift, handle, indent=2, ensure_ascii=False)
         return 0
 
+    raw_path = Path(args.raw_out) if args.raw_out else out_dir / "t3_raw.csv"
+
+    missing = missing_eval_inputs(args.ckpt_dir, args.drift_from, args.drift_to,
+                                  not args.include_malicious, args.max_clients)
+    if missing:
+        print(f"[exp_t3] ✗ 这个 run 目录缺 {len(missing)} 个 eval 需要的文件：")
+        for path in missing[:20]:
+            print(f"    {path}")
+        if len(missing) > 20:
+            print(f"    …… 还有 {len(missing) - 20} 个")
+        print("  client_*.pt / meta.json / generator.pt 由 hooks.save_run 在 run "
+              "结束时写在**根目录**（不是 round_XXXX/ 下）；\n"
+              "  round_XXXX/global.pt 由 snapshots.SnapshotRecorder 写。缺哪类就补哪类。")
+        return 1
+
     if not args.execute:
-        print(f"[dry-run] {len(recipes)} 个配方 × 每个配方全部良性客户端。"
-              f"加 --execute 真跑。")
+        clients = eval_clients(args.ckpt_dir, not args.include_malicious,
+                               args.max_clients)
+        done = load_done_keys(raw_path) if args.resume else set()
+        cells = len(recipes) * len(clients) - len(done)
+        samples = sum(len(record["test_indices"]) for record in clients)
+        print(f"[dry-run] {len(recipes)} 个配方 × {len(clients)} 个客户端"
+              f"{'（只良性）' if not args.include_malicious else ''} = "
+              f"{len(recipes) * len(clients)} 格"
+              + (f"，其中 {len(done)} 格已在 {raw_path} 里，还剩 {cells} 格"
+                 if done else ""))
+        print(f"  每一格 = 该客户端 test 分区上的一趟 ASR（PGD num_iter=1 + "
+              f"生成器 + 前向）加一趟干净准确率；"
+              f"全体客户端每轮合计 {samples} 个样本。")
+        print(f"  读盘：客户端在外层循环 -> 每个 checkpoint **只读一次**"
+              f"（{len(clients)} 次），不是 {len(recipes) * len(clients)} 次。")
+        print(f"  逐格写 {raw_path}；被抢占后加 --resume 续跑。")
         for recipe in recipes:
             print(f"  {recipe['family']:<24} m={recipe['multiplier']:<5g}"
                   f" seed={recipe['seed']} target_rel="
                   f"{recipe['target_relative']:.4f}")
+        print(f"\n  加 --execute 真跑。")
         return 0
 
     import torch
@@ -597,13 +792,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     test_dataset = torchvision.datasets.CIFAR10(args.data_root, train=False,
                                                 download=False,
                                                 transform=transform)
-    rows = evaluate_recipes(args.ckpt_dir, recipes, args.drift_from,
-                            args.drift_to, test_dataset,
-                            model_size=args.model_size, device=device,
-                            batch_size=args.batch_size,
-                            benign_only=not args.include_malicious)
+    evaluate_recipes(args.ckpt_dir, recipes, args.drift_from, args.drift_to,
+                     test_dataset, model_size=args.model_size, device=device,
+                     batch_size=args.batch_size,
+                     benign_only=not args.include_malicious,
+                     max_clients=args.max_clients, raw_path=raw_path,
+                     resume=args.resume)
+
+    # 从 raw CSV 聚合（而不是只用本次跑出来的行）—— 续跑时旧格子也要算进去
+    manifest, _ = calibrate(args.ckpt_dir, args.drift_from, args.drift_to,
+                            recipes)
+    profiles = {recipe_key(row): {key: row[key] for key in
+                                  ("achieved_relative_displacement",
+                                   "cos_with_real_drift", "cos_with_theta",
+                                   "layer_profile_max_rel_dev")}
+                for row in manifest}
+    rows = aggregate_results(load_raw_rows(raw_path), profiles)
     path = write_rows(rows, out_dir / "t3_results.csv")
-    print(f"\n[exp_t3] {len(rows)} 行 -> {path}")
+    print(f"\n[exp_t3] {len(rows)} 个配方（逐格原始行在 {raw_path}）-> {path}")
+    print(f"  {'family':<24}{'mult':>6}{'seed':>5}{'ASR':>9}{'ACC':>9}{'n':>5}")
+    for row in rows:
+        print(f"  {row['family']:<24}{row['multiplier']:>6g}{row['seed']:>5}"
+              f"{row['asr']:>9.4f}{row['acc']:>9.4f}{row['n_clients']:>5}")
 
     verdict = flatness_verdict(rows)
     print("\n=== 判词 ===")
