@@ -39,7 +39,13 @@ __all__ = ["dispersion_scores", "naturalness", "recovery_score",
            "excess_response", "observable_score", "baseline_signals",
            "NATURALNESS_GROUPS"]
 
-NATURALNESS_GROUPS = ("real", "delta_only", "delta_plus_xi", "random_noise")
+#: ⚠️ 2026-09 审计补了 ``query_clean``。此前这份清单里**没有"未扰动的 query"**，
+#: 于是 `delta_only` 的 0.084 与 `random_noise` 的 0.073 都无从解读 ——
+#: 不知道**没加任何扰动时** query 的 overlap 是多少，就答不出「δ 到底把
+#: query 推动了多少」，只能答「δ 和噪声一样」。两个问题不是一回事。
+#: 它是纯前向、零额外成本的一组，没有理由不测。
+NATURALNESS_GROUPS = ("real", "query_clean", "delta_only", "delta_plus_xi",
+                      "random_noise")
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +151,8 @@ def naturalness(model: nn.Module, probe_loaders: Dict[str, Any],
 
     group_spec = {
         "real": ("target", "clean"),
+        # 未扰动的 query —— 一切"δ 推动了多少"的分母。见 NATURALNESS_GROUPS 的注释。
+        "query_clean": ("query", "clean"),
         "delta_only": ("query", "delta_only"),
         "delta_plus_xi": ("query", "delta_plus_xi"),
         "random_noise": ("query", "random_noise"),

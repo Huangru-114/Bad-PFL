@@ -49,7 +49,7 @@ import fba  # 原仓库模块；直接复用 pgd_attack，不重写，避免实�
 __all__ = ["MODES", "MODES_REQUIRING_DELTA", "MODES_REQUIRING_XI",
            "DATA_SOURCE_MODES",
            "delta_from_generator", "make_xi_fn", "make_delta_fn",
-           "apply_perturbation", "linf"]
+           "apply_perturbation", "linf", "clip_diagnostics"]
 
 MODES = ("clean", "xi_only", "delta_only", "delta_plus_xi", "random_noise",
          # --- 实验 E 的别名与新增模式（见下方说明） ---
@@ -73,6 +73,40 @@ DATA_SOURCE_MODES = ("real_target",)
 def linf(a: torch.Tensor, b: torch.Tensor) -> float:
     """两张图之间的 L∞ 距离（标量）。用于预算校验与单元测试。"""
     return float((a - b).abs().max().item())
+
+
+def clip_diagnostics(raw: torch.Tensor, clamped: torch.Tensor,
+                     images: torch.Tensor) -> dict:
+    """末端 clamp **削掉了多少触发器** —— 忠实性的直接读数。
+
+    # 为什么需要它（2026-09 审计发现）
+
+    原始 `fba.our_poison_func`（fba.py:55）在 ``poison_data + gen_trigger``
+    之后**没有 clamp**；本模块的 ``apply_perturbation`` clamp 到 [0,1]。
+    于是凡是 PGD 输出已经贴到 0/1 边界的像素，δ 的那一部分会被削掉，
+    **diag 重建的触发器系统性弱于真实攻击**。
+
+    这正是 `HANDOFF.md §5b` 记录的"perturb 分解路径低估 ASR"的一个具体机制
+    —— §5b 当时只归因到"弱后门模型"，没有定位到 clamp。
+
+    返回：
+
+    - ``clipped_fraction``   被 clamp 改动过的像素比例
+    - ``clipped_l1_ratio``   被削掉的扰动量占总扰动量的比例（L1 口径）
+    - ``linf_before_clip`` / ``linf_after_clip``
+
+    这几个数不落盘就等于没测过 —— 调用方应当把它们写进原始 CSV。
+    """
+    delta_raw = raw - images
+    removed = raw - clamped
+    total = float(delta_raw.abs().sum().item())
+    return {
+        "clipped_fraction": float((removed != 0).float().mean().item()),
+        "clipped_l1_ratio": (float(removed.abs().sum().item()) / total
+                             if total > 0 else 0.0),
+        "linf_before_clip": linf(raw, images),
+        "linf_after_clip": linf(clamped, images),
+    }
 
 
 @contextlib.contextmanager
@@ -183,7 +217,9 @@ def apply_perturbation(images: torch.Tensor, mode: str,
                        rng: Optional[torch.Generator] = None,
                        noise_dist: str = "rademacher",
                        pixel_min: float = 0.0,
-                       pixel_max: float = 1.0) -> torch.Tensor:
+                       pixel_max: float = 1.0,
+                       clamp: bool = True,
+                       diagnostics: Optional[dict] = None) -> torch.Tensor:
     """按 ``mode`` 施加扰动，返回与输入同形状的图像张量。
 
     Parameters
@@ -207,8 +243,21 @@ def apply_perturbation(images: torch.Tensor, mode: str,
       在 tanh 未饱和时**可能小于** eps —— 两者是"同预算"，不是"同实测幅度"。
     - ``delta_plus_xi`` 中的 δ 由**干净输入** x 计算，而非由 ``x + ξ`` 计算，
       与 fba.py:54 使用 ``data`` 而非 ``poison_data`` 的行为一致。
-    - 所有模式最终 clamp 到 ``[pixel_min, pixel_max]``。
     - 缺少必需组件时抛 ``ValueError``，**不做静默降级**。
+
+    clamp:
+        默认 ``True``，把结果压回 ``[pixel_min, pixel_max]``。
+
+        ⚠️ **这是与原实现的一处偏离，2026-09 审计才定位到**：
+        `fba.our_poison_func`（fba.py:55）在 ``poison_data + gen_trigger``
+        之后**没有 clamp**。于是 PGD 输出已经贴到 0/1 边界的像素上，δ 会被
+        本函数削掉一部分，**重建的触发器系统性弱于真实攻击**。
+        要复现原实现的口径就传 ``clamp=False``（代价是像素可能越界，
+        那正是原实现在做的事）。
+    diagnostics:
+        传一个 dict 进来，函数会把 `clip_diagnostics` 的读数写进去
+        （被削掉多少）。**不测就等于不知道偏离有多大**，所以凡是要落盘的
+        评估都应当传它。
     """
     if mode in DATA_SOURCE_MODES:
         raise ValueError(
@@ -286,4 +335,7 @@ def apply_perturbation(images: torch.Tensor, mode: str,
     else:  # pragma: no cover - 上面已穷举
         raise ValueError(f"未处理的模式 '{mode}'")
 
-    return out.clamp(float(pixel_min), float(pixel_max))
+    clamped = out.clamp(float(pixel_min), float(pixel_max))
+    if diagnostics is not None:
+        diagnostics.update(clip_diagnostics(out, clamped, images))
+    return clamped if clamp else out

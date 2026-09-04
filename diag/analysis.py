@@ -201,6 +201,21 @@ def _alpha_order(frame: pd.DataFrame) -> List[float]:
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
+def overlap_chance_level(n_ref: int, n_other_per_class: int,
+                         num_classes: int) -> float:
+    """``knn_overlap`` 的**随机基准**：参照库里 ref 所占的比例。
+
+    一个与两个分布都无关的查询点，其 k 近邻里 ref 的期望占比就是这个数。
+    正式配置下 = 500 / (500 + 9×200) = **0.217**。
+
+    ⚠️ 不报它，overlap 的绝对值就没法读。2026-09 审计发现实验 A 的三个扰动组
+    （0.067–0.162）**全部低于**这个基准 —— 所以「δ = 经验基率」这个说法本身
+    不准确：它们比基率还低（非目标类图片本来就更靠近 `other`）。
+    """
+    bank = int(n_ref) + int(n_other_per_class) * (int(num_classes) - 1)
+    return float(n_ref) / bank if bank > 0 else float("nan")
+
+
 def summarize(raw_csv_glob, metric: str = "overlap") -> pd.DataFrame:
     """实验 A 的汇总：按 ``(alpha, seed, group)`` 计算跨客户端变异系数。
 
@@ -214,11 +229,22 @@ def summarize(raw_csv_glob, metric: str = "overlap") -> pd.DataFrame:
     返回的 DataFrame 每行是一个 ``(alpha, seed, group)``，列包含
     ``cv`` / ``mean`` / ``std`` / ``n_clients``，并附带同 ``(alpha, seed)`` 下的
     ``ng_vs_real``（该组 CV 减去 real 组 CV）。
+
+    ⚠️ **``metric`` 要两个都跑**（2026-09 审计）：``exp_a`` 每行同时算了
+    ``overlap``（特征空间 kNN 邻域构成）与 ``nat_rate``（被判为目标类的比例），
+    但 `results/summary/expA_summary.csv` 里**只有 overlap** —— nat_rate
+    从来没被汇总过。而"干净模型对 δ 有没有响应"这个问题，**nat_rate 才是直接
+    读数**，overlap 回答的是另一个问题。零机时可补：对同一批 raw CSV 再跑一次
+    ``summarize(..., metric="nat_rate")``。
     """
     raw = load_raw(raw_csv_glob)
     for column in ("alpha", "seed", "group", metric):
         if column not in raw.columns:
-            raise KeyError(f"原始 CSV 缺少列 '{column}'")
+            raise KeyError(
+                f"原始 CSV 缺少列 '{column}'"
+                + ("。exp_a 的行里应当同时有 overlap 与 nat_rate；"
+                   "缺 nat_rate 说明这批 raw 是更早的版本跑的。"
+                   if metric == "nat_rate" else ""))
 
     rows = []
     for (alpha, seed, group), block in raw.groupby(["alpha", "seed", "group"]):

@@ -171,3 +171,54 @@ def test_delta_shape_mismatch_raises():
         assert "形状" in str(exc)
     else:
         raise AssertionError("delta 形状不匹配时应抛 ValueError")
+
+
+# ---------------------------------------------------------------------------
+# 末端 clamp 的忠实性（2026-09 审计）
+# ---------------------------------------------------------------------------
+def test_clamp_flag_reproduces_the_original_unclamped_composition():
+    """`fba.our_poison_func`（fba.py:55）加完 δ 之后**不** clamp。
+
+    默认 clamp=True 会削掉贴边像素上的那部分 δ，使重建的触发器弱于真实攻击；
+    clamp=False 才是原实现的口径。两条路径必须真的不同，否则这个开关是假的。
+    """
+    import torch
+    from diag.perturb import apply_perturbation
+
+    images = torch.zeros(1, 3, 4, 4)          # 全 0：加负向 δ 必然越界
+    delta = torch.full_like(images, -4.0 / 255.0)
+    clamped = apply_perturbation(images, "delta_only", delta=delta)
+    raw = apply_perturbation(images, "delta_only", delta=delta, clamp=False)
+    assert torch.allclose(clamped, torch.zeros_like(images))   # 全被削掉
+    assert torch.allclose(raw, delta)                          # 原样保留
+    assert not torch.allclose(clamped, raw)
+
+
+def test_clip_diagnostics_quantifies_what_the_clamp_removed():
+    import torch
+    from diag.perturb import apply_perturbation
+
+    images = torch.zeros(1, 3, 2, 2)
+    delta = torch.full_like(images, -0.1)
+    diagnostics = {}
+    apply_perturbation(images, "delta_only", delta=delta,
+                       diagnostics=diagnostics)
+    # 12 个像素全部越界 -> 100% 被改动，扰动被 100% 削掉
+    assert np.isclose(diagnostics["clipped_fraction"], 1.0)
+    assert np.isclose(diagnostics["clipped_l1_ratio"], 1.0)
+    assert np.isclose(diagnostics["linf_before_clip"], 0.1)
+    assert np.isclose(diagnostics["linf_after_clip"], 0.0)
+
+
+def test_clip_diagnostics_is_all_zero_when_nothing_is_clipped():
+    import torch
+    from diag.perturb import apply_perturbation
+
+    images = torch.full((1, 3, 2, 2), 0.5)    # 远离边界
+    delta = torch.full_like(images, 0.1)
+    diagnostics = {}
+    out = apply_perturbation(images, "delta_only", delta=delta,
+                             diagnostics=diagnostics)
+    assert np.isclose(diagnostics["clipped_fraction"], 0.0)
+    assert np.isclose(diagnostics["clipped_l1_ratio"], 0.0)
+    assert torch.allclose(out, images + delta)

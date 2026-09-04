@@ -92,8 +92,15 @@ def summarize_e(raw_csv_glob) -> pd.DataFrame:
     if missing:
         raise KeyError(f"exp_e CSV 缺少列: {sorted(missing)}")
 
+    # ⚠️ `linf_realized` / `clipped_*` 是**忠实性读数**，不是可有可无的附加列：
+    # 原实现（fba.py:55）加完 δ 之后不 clamp，本工具链 clamp 了，重建的触发器
+    # 因此系统性偏弱。2026-09 审计发现它们此前被这张表整列丢掉，于是"偏离有多大"
+    # 从来没人看得见。加回来。
     metrics = [c for c in ("asr_targeted", "asr_targeted_unfiltered",
-                           "error_rate", "clean_acc") if c in raw.columns]
+                           "error_rate", "clean_acc",
+                           "linf_realized", "linf_budget",
+                           "clipped_fraction", "clipped_l1_ratio")
+               if c in raw.columns]
     rows = []
     for keys, block in raw.groupby(["alpha", "seed", "cell", "perturb_mode"]):
         alpha, seed, cell, mode = keys

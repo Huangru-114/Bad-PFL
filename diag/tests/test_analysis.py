@@ -234,3 +234,13 @@ def test_summarize_c_direction_declared_flag():
 
     summary = summarize_c(_fake_exp_c())
     assert summary["direction_declared"].all()
+
+
+def test_overlap_chance_level_is_the_ref_share_of_the_bank():
+    """不报 chance，overlap 的绝对值就没法读（2026-09 审计）。"""
+    from diag.analysis import overlap_chance_level
+    # 正式配置：ref 500，other 9 类 × 200 = 1800，库共 2300
+    assert np.isclose(overlap_chance_level(500, 200, 10), 500 / 2300)
+    # 实验 A 的三个扰动组（0.067–0.162）全部低于它 —— 这是要写进正文的事实
+    assert overlap_chance_level(500, 200, 10) > 0.162
+    assert np.isnan(overlap_chance_level(0, 0, 1))
