@@ -71,6 +71,7 @@
 | `represent.py` | 表征指标（从 checkpoint **离线**算） | `embed`, `representation_row`, `representation_table` | CLI |
 | `paramspace.py` | 参数空间的逐坐标度量。**纯 numpy，不 import torch** | `build_index`, `displacement`, `cosine`, `sign_agreement`, `group_energy`, `topk_energy`, `rank_quantile`, `binned_curve`, `pearson`, `spearman`, `layer_table` | `exp_t0` |
 | `exp_t0.py` | **T0（Stage 0）**：全局模型的逐坐标位移剖面（纯 CPU） | `build_windows`, `window_report`, `analyze`, `displacement_verdict` | CLI |
+| `exp_t3.py` | **T3**：地板是宽盆还是漂移方向特殊 —— 同幅度扰动 vs 真实漂移 | `make_direction`, `scale_to_relative`, `perturbation_profile`, `build_recipes`, `apply_perturbation`, `flatness_verdict` | CLI |
 
 ### 测试
 
@@ -94,6 +95,7 @@
 | `tests/test_represent.py` | 配对距离不得截断；`trigger_pull` 的符号 |
 | `tests/test_paramspace.py` | 逐个手算的范数/能量占比/秩相关；BN 的**结构判据**；零向量 cosine 返回 nan 而非 0 |
 | `tests/test_exp_t0.py` | 窗口优先级（attack > anchor > segment）、缺轮次如实跳过、判词四个分支各一条、整链路冒烟（`.npz`，**不需要 torch**） |
+| `tests/test_exp_t3.py` | 六个方向族各自的不变量（逐层范数 / 逐坐标幅度 / cos）、定标必须命中 target、**ACC 坏掉时判词必须拒绝给 ASR 结论**、整链路冒烟 |
 | `tests/run_tests.py` | 不依赖 pytest 的运行器 |
 | `tests/smoke_integration.py` | 端到端集成冒烟测试 |
 
@@ -522,6 +524,43 @@ python -m diag.exp_t0 --from-windows results/t0/t0_windows.csv \
 
 老 CSV 没有 `aggregated_*` 列时，`--from-layers` 会从 `scope=kind` 行**精确重建**
 （不是估计）；缺 kind 行的窗口就保持没有该列，判词自己回退到 `trainable` 并标注。
+
+### 3.5f T3：地板是宽盆，还是真实漂移方向特殊？
+
+T0 已经证明干净训练把参数改写了 0.156（相对，aggregated 口径）而 ASR 没掉。
+T3 问的是下一个问题：**换成随机方向、同样幅度，ASR 掉不掉？**
+
+```bash
+# 1) CPU：标定与清单（不需要 GPU、不需要数据、不排队）
+python -m diag.exp_t3 --mode build \
+    --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --drift-from 200 --drift-to 400 --base-relative 0.156 \
+    --out-dir results/t3
+
+# 2) GPU：先 dry-run 看格子数，确认后加 --execute
+python -m diag.exp_t3 --mode eval --ckpt-dir ... --out-dir results/t3
+python -m diag.exp_t3 --mode eval --ckpt-dir ... --out-dir results/t3 --execute
+```
+
+六个方向族：`zero`（自检锚点）/ `gaussian_global` / `gaussian_layer_matched`
+（主对照：同幅度、同逐层剖面、方向随机）/ `shuffled`（层内置换坐标）/
+`sign_flipped`（逐坐标翻符号）/ `real`（正对照）。
+`shuffled` 与 `sign_flipped` 把"幅度"、"坐标身份"、"方向相干性"逐个剥开。
+
+**先跑 build 看标定自检**，三条必须成立，否则对照不成立：
+`achieved == target`；`real` 的 `cos_with_real_drift == 1`；
+`layer_profile_max_rel_dev` 对 `gaussian_layer_matched` ≈ 0 而对
+`gaussian_global` 明显 > 0。
+
+**扰动只加在 `aggregated` 参数上**，客户端自己的 BN 原样保留 —— FedBN 下全局
+模型的 BN 恒不更新（T0 实测位移恰好为 0），扰动它等于做训练根本不会做的事。
+
+**ASR 必须与 ACC 一起读。** 把模型打坏也能让 ASR 掉。判词在 ACC 相对基线掉超过
+`ACC_GUARD = 0.05` 时**拒绝**给该幅度下的任何 ASR 结论，并明说"不要读成扰动能
+消后门 —— 模型本身已经坏了"。
+
+**配方不存扰动向量**（11M 坐标 × float32 ≈ 45MB 一份，六族×四幅度×三 seed 会到
+3GB），只存 `(族, seed, 目标幅度)`，用固定 seed 确定性重建；落盘的是**标定读数**。
 
 ### 3.6 扫描矩阵（**默认 dry-run**）
 

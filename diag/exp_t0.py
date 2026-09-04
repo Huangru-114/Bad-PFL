@@ -269,32 +269,13 @@ def window_report(state_from: Dict[str, np.ndarray],
     return {
         "summary": summary,
         "layers": ps.layer_table(theta_t, delta_t,
-                                 _masked_index(index, trainable), by="layer"),
+                                 ps.subset_index(index, trainable),
+                                 by="layer"),
         "kinds": kind_rows,
         "energy": ps.topk_energy(delta_t, topk_fractions),
         "bins": ps.binned_curve(np.abs(theta_t), np.abs(delta_t),
                                 n_bins=n_bins, mode="quantile"),
     }
-
-
-def _masked_index(index: ps.ParamIndex, mask: np.ndarray) -> ps.ParamIndex:
-    """从整体索引里裁出"只含掩码为 True 的整张量"的子索引。
-
-    掩码总是按**整张量**取的（``kind_mask`` / ``layer_mask`` 都是），所以
-    这里只需按张量筛，不会出现半张量被切开的情况；真被切开时直接报错，
-    因为那样得到的子索引与子向量对不上，静默通过会让逐层表整体错位。
-    """
-    keys, sizes, kinds, shapes = [], [], [], []
-    for i, key in enumerate(index.keys):
-        block = mask[index.offsets[i]:index.offsets[i + 1]]
-        if block.all():
-            keys.append(key)
-            sizes.append(index.sizes[i])
-            kinds.append(index.kinds[i])
-            shapes.append(index.shapes[i])
-        elif block.any():
-            raise ValueError(f"掩码把张量 '{key}' 切开了 —— 子索引与子向量会错位")
-    return ps.ParamIndex(keys, sizes, kinds, shapes, index.excluded)
 
 
 # ---------------------------------------------------------------------------

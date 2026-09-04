@@ -47,7 +47,8 @@ __all__ = [
     "KIND_WEIGHT", "KIND_BIAS", "KIND_BN_AFFINE", "KIND_BN_BUFFER",
     "TRAINABLE_KINDS",
     "parameter_kind", "layer_of", "block_of",
-    "ParamIndex", "build_index", "flatten", "displacement",
+    "ParamIndex", "build_index", "subset_index", "flatten", "unflatten",
+    "displacement",
     "l2", "cosine", "sign_agreement", "relative_displacement",
     "group_energy", "topk_energy", "average_rank", "rank_quantile",
     "pearson", "spearman", "binned_curve", "layer_table",
@@ -185,6 +186,42 @@ def build_index(state: Dict[str, np.ndarray]) -> ParamIndex:
         kinds.append(parameter_kind(key, all_keys))
         shapes.append(tuple(value.shape))
     return ParamIndex(keys, sizes, kinds, shapes, excluded)
+
+
+def subset_index(index: ParamIndex, mask: np.ndarray) -> ParamIndex:
+    """从整体索引里裁出"只含掩码为 True 的整张量"的子索引。
+
+    掩码总是按**整张量**取的（``kind_mask`` / ``layer_mask`` 都是），所以这里只需
+    按张量筛，不会出现半张量被切开的情况；真被切开时直接报错 —— 那样得到的子索引
+    与子向量对不上，静默通过会让逐层表整体错位。
+    """
+    keys, sizes, kinds, shapes = [], [], [], []
+    for i, key in enumerate(index.keys):
+        block = mask[index.offsets[i]:index.offsets[i + 1]]
+        if block.all():
+            keys.append(key)
+            sizes.append(index.sizes[i])
+            kinds.append(index.kinds[i])
+            shapes.append(index.shapes[i])
+        elif block.any():
+            raise ValueError(f"掩码把张量 '{key}' 切开了 —— 子索引与子向量会错位")
+    return ParamIndex(keys, sizes, kinds, shapes, index.excluded)
+
+
+def unflatten(vector: np.ndarray, index: ParamIndex
+              ) -> Dict[str, np.ndarray]:
+    """``flatten`` 的逆：按索引把一维向量切回 ``{key: ndarray}``。
+
+    形状由索引给定，因此往回写的一定与原 state_dict 对齐；长度对不上直接报错。
+    """
+    vector = np.asarray(vector, dtype=np.float64)
+    if vector.size != index.n_params:
+        raise ValueError(f"向量长度 {vector.size} 与索引的 {index.n_params} 不一致")
+    out: Dict[str, np.ndarray] = {}
+    for i, key in enumerate(index.keys):
+        block = vector[index.offsets[i]:index.offsets[i + 1]]
+        out[key] = block.reshape(index.shapes[i])
+    return out
 
 
 def flatten(state: Dict[str, np.ndarray],

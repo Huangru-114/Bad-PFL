@@ -33,8 +33,20 @@ B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前�
 → **(a) 休眠容量没被杀死，但只剩"坐标粒度的小子集"这一种活法**；
 **(c) 函数平坦拿到正面证据**。判 (a) 生死仍需 S1 载体分离（要 `L_bd` 梯度，集群）。
 
-**下一步 = T3 平坦性**，T0 刚好喂出了它需要的幅度：往 θ₄₀₀ 加**相对幅度 0.156**
-的随机方向扰动（配随机方向对照），看 ASR 掉不掉。掉不动 = 宽盆 = (c)。
+**下一步 = T3 平坦性**，T0 刚好喂出了它需要的幅度。**代码已就绪**
+（`diag/exp_t3.py`，设计见 `PLAN_T0T4.md §10`，用法见 `README §3.5f`）：
+
+```bash
+# CPU：标定，不排队。先看自检三条对不对，再花机时
+python -m diag.exp_t3 --mode build --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \
+    --base-relative 0.156 --out-dir results/t3
+# GPU：dry-run 看格子数 -> 加 --execute 真评
+python -m diag.exp_t3 --mode eval  --ckpt-dir ... --out-dir results/t3 --execute
+```
+
+问的是：同样 0.156 的幅度、换成**随机方向**，ASR 掉不掉？掉不动 = 宽盆 = (c)；
+掉得动 = 良性训练的漂移方向特殊。六个方向族把「幅度」「坐标身份」「方向相干性」
+逐个剥开。**判词在 ACC 掉超过 0.05 时拒绝给 ASR 结论** —— 把模型打坏也能让 ASR 掉。
 
 ---
 
@@ -108,6 +120,7 @@ B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前�
 | `python -m diag.run_exp1` / `analysis_exp1` | **正式实验 1/1B**：剂量边界 + 攻击持续时间 |
 | `python -m diag.represent` | 离线表征分析（trigger_pull 等） |
 | `python -m diag.exp_t0` | **T0（Stage 0）**：全局模型的逐坐标位移剖面，纯 CPU 不排队 |
+| `python -m diag.exp_t3` | **T3**：同幅度扰动 vs 真实漂移（`--mode build` 纯 CPU，`--mode eval` 要 GPU） |
 
 ## 5. 正式实验 1/1B（最近一次交付，代码就绪，等集群跑）
 
