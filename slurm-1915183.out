@@ -1,0 +1,27 @@
+[exp_t0]     10 行 -> results/t0/t0_windows.csv
+[exp_t0]    450 行 -> results/t0/t0_layers.csv
+[exp_t0]     40 行 -> results/t0/t0_energy.csv
+[exp_t0]    100 行 -> results/t0/t0_bins.csv
+
+=== 位移剖面（可训练参数，BN buffer 已排除）===
+          window     kind  phase  rel |Δθ|/|θ|   cos(θ,Δθ)  cos(from,to)
+         50->100  segment  mixed     0.0663269      0.0415      0.997823
+        100->150  segment  mixed     0.0628043      0.0606      0.998056
+        150->200  segment attack     0.0612351      0.0705      0.998156
+        200->250   anchor  clean     0.0545119      0.0673      0.998535
+        200->300   anchor  clean     0.0723452      0.0772      0.997437
+        200->350   anchor  clean     0.0792893      0.0794      0.996930
+        200->400   anchor  clean     0.0826986      0.0802      0.996664
+        250->300  segment  clean     0.0425637      0.0497      0.999101
+        300->350  segment  clean     0.0286267      0.0280      0.999591
+        350->400  segment  clean     0.0202667      0.0197      0.999795
+
+=== 判词 ===
+  n_windows                          10
+  clean_window                       200->400
+  clean_relative_displacement        0.0826986
+  clean_cos_from_to                  0.996664
+
+  部分结论：干净阶段 200->400 的相对位移 0.0827（cos(θ_from, θ_to)=0.9967）。**缺植入窗口做参照尺度**（需要 attack_start 与 attack_stop 两个快照），因此无法说它是大是小 —— 未能确定。
+
+[exp_t0] 判词 -> results/t0/t0_verdict.json

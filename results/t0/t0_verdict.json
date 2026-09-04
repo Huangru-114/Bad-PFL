@@ -1,0 +1,93 @@
+{
+  "run_id": "attack_a0.5_s0_e1b_persist_s0",
+  "rounds": [
+    50,
+    100,
+    150,
+    200,
+    250,
+    300,
+    350,
+    400
+  ],
+  "windows": [
+    {
+      "round_from": 50,
+      "round_to": 100,
+      "kind": "segment",
+      "phase": "mixed",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 100,
+      "round_to": 150,
+      "kind": "segment",
+      "phase": "mixed",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 150,
+      "round_to": 200,
+      "kind": "segment",
+      "phase": "attack",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 200,
+      "round_to": 250,
+      "kind": "anchor",
+      "phase": "clean",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 200,
+      "round_to": 300,
+      "kind": "anchor",
+      "phase": "clean",
+      "span_rounds": 100
+    },
+    {
+      "round_from": 200,
+      "round_to": 350,
+      "kind": "anchor",
+      "phase": "clean",
+      "span_rounds": 150
+    },
+    {
+      "round_from": 200,
+      "round_to": 400,
+      "kind": "anchor",
+      "phase": "clean",
+      "span_rounds": 200
+    },
+    {
+      "round_from": 250,
+      "round_to": 300,
+      "kind": "segment",
+      "phase": "clean",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 300,
+      "round_to": 350,
+      "kind": "segment",
+      "phase": "clean",
+      "span_rounds": 50
+    },
+    {
+      "round_from": 350,
+      "round_to": 400,
+      "kind": "segment",
+      "phase": "clean",
+      "span_rounds": 50
+    }
+  ],
+  "verdict": {
+    "n_windows": 10,
+    "clean_window": "200->400",
+    "clean_relative_displacement": 0.0826986031196178,
+    "clean_cos_from_to": 0.9966638488908475,
+    "verdict": "部分结论：干净阶段 200->400 的相对位移 0.0827（cos(θ_from, θ_to)=0.9967）。**缺植入窗口做参照尺度**（需要 attack_start 与 attack_stop 两个快照），因此无法说它是大是小 —— 未能确定。"
+  },
+  "noise_floor_relative_displacement": null
+}
