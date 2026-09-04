@@ -27,6 +27,7 @@ import numpy as np
 
 from diag import paramspace as ps
 from diag.exp_t3 import (ACC_GUARD, DEFAULT_MULTIPLIERS, FAMILIES,
+                         client_checkpoint, iso_acc_comparison,
                          aggregate_results, append_row, apply_perturbation,
                          build_recipes, calibrate, eval_clients,
                          flatness_verdict, load_done_keys, load_raw_rows, main,
@@ -252,65 +253,114 @@ def test_verdict_needs_the_zero_baseline():
     assert "baseline_acc" not in out
 
 
-def test_verdict_calls_a_wide_basin_when_asr_survives():
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 1.0, 0.39, 0.69),
-            _cell("shuffled", 1.0, 0.40, 0.68),
-            _cell("real", 1.0, 0.38, 0.69)]
-    out = flatness_verdict(rows)
-    assert np.isclose(out["baseline_asr"], 0.41)
-    assert out["largest_usable_multiplier"] == 1.0
+def _grid(real_asr_at_guard, random_asr_at_guard, asr0=0.40, acc0=0.80):
+    """造一个网格：real 与随机族都恰好在 ACC 代价 0.05 处取到指定 ASR。
+
+    ACC 代价刚好等于 ACC_GUARD 时插值直接命中该点，不必依赖插值细节。
+    """
+    rows = [_cell("zero", 0.0, asr0, acc0)]
+    rows.append(_cell("real", 1.0, real_asr_at_guard, acc0 - ACC_GUARD))
+    for family in ("gaussian_layer_matched", "shuffled"):
+        rows.append(_cell(family, 1.0, random_asr_at_guard, acc0 - ACC_GUARD))
+    return rows
+
+
+def test_verdict_calls_the_direction_special_when_only_real_erases():
+    """首跑的形状：等 ACC 代价下 real 打到 15%，随机方向还剩 90%+。
+
+    **初版在这里报的是「宽盆」** —— 因为它只看随机族、根本没读 asr_real。
+    这条 case 就是那个 bug 的回归测试。
+    """
+    out = flatness_verdict(_grid(real_asr_at_guard=0.06,
+                                 random_asr_at_guard=0.37))
+    assert "方向特殊" in out["verdict"]
+    assert "宽盆" not in out["verdict"].replace("宽盆读法", "")
+    assert out["real_retained_fraction"] < 0.2
+    assert out["random_retained_fraction"] > 0.9
+    # 锚点语义必须写进判词：real 是外推，不是复现那 200 轮
+    assert "外推" in out["verdict"]
+
+
+def test_verdict_calls_a_wide_basin_only_when_real_also_fails():
+    out = flatness_verdict(_grid(real_asr_at_guard=0.38,
+                                 random_asr_at_guard=0.37))
     assert "宽盆" in out["verdict"]
-    # 宽盆意味着参数空间的定点操作够不到它 —— 这是防御选型的直接后果，要说出来
     assert "剪枝" in out["verdict"]
 
 
-def test_verdict_calls_the_direction_special_when_random_kills_asr():
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 1.0, 0.10, 0.68),
-            _cell("shuffled", 1.0, 0.12, 0.69)]
-    out = flatness_verdict(rows)
-    assert "方向特殊" in out["verdict"]
-    assert out["asr_retained_fraction"] < 0.4
-
-
-def test_verdict_refuses_to_read_asr_once_acc_is_broken():
-    """把模型打坏也能让 ASR 掉 —— 那不是"扰动能消后门"。"""
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 4.0, 0.02, 0.11)]
-    out = flatness_verdict(rows)
-    assert "未能确定" in out["verdict"]
-    assert out["per_multiplier"]["4"]["acc_ok"] is False
-    assert "模型本身已经坏了" in out["verdict"]
-
-
-def test_verdict_uses_the_largest_magnitude_that_acc_survives():
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 1.0, 0.40, 0.69),
-            _cell("gaussian_layer_matched", 2.0, 0.39, 0.67),
-            _cell("gaussian_layer_matched", 4.0, 0.05, 0.20)]
-    out = flatness_verdict(rows)
-    assert out["largest_usable_multiplier"] == 2.0      # 4.0 被 ACC 闸门挡掉
-    assert out["per_multiplier"]["4"]["acc_ok"] is False
-    assert out["per_multiplier"]["2"]["acc_ok"] is True
-    assert "宽盆" in out["verdict"]
+def test_verdict_reports_both_when_random_also_works():
+    out = flatness_verdict(_grid(real_asr_at_guard=0.05,
+                                 random_asr_at_guard=0.10))
+    assert "两者都有效" in out["verdict"]
+    assert "不要**只报 real" in out["verdict"]
 
 
 def test_verdict_middle_case_refuses_to_pick_a_side():
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 1.0, 0.25, 0.69)]
-    out = flatness_verdict(rows)
+    out = flatness_verdict(_grid(real_asr_at_guard=0.25,
+                                 random_asr_at_guard=0.30))
     assert "中间情形" in out["verdict"]
 
 
-def test_verdict_excludes_real_from_the_random_control_mean():
-    """`real` 是正对照，不能混进"随机方向"的均值里。"""
-    rows = [_cell("zero", 0.0, 0.41, 0.70),
-            _cell("gaussian_layer_matched", 1.0, 0.10, 0.69),
-            _cell("real", 1.0, 0.40, 0.69)]
+def test_verdict_needs_real_to_be_readable_at_the_iso_acc_point():
+    """real 的 ACC 代价区间没覆盖到闸门时不外推，直说未能确定。"""
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("real", 0.5, 0.30, 0.799),          # 代价才 0.001
+            _cell("shuffled", 1.0, 0.37, 0.75)]
     out = flatness_verdict(rows)
-    assert np.isclose(out["per_multiplier"]["1"]["asr_random_mean"], 0.10)
-    assert np.isclose(out["per_multiplier"]["1"]["asr_real"], 0.40)
+    assert "未能确定" in out["verdict"] and "不外推" in out["verdict"]
+
+
+def test_verdict_needs_a_random_control_at_the_iso_acc_point():
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("real", 1.0, 0.05, 0.75),
+            _cell("shuffled", 0.5, 0.39, 0.7995)]     # 随机族代价太小
+    out = flatness_verdict(rows)
+    assert "未能确定" in out["verdict"] and "缺对照" in out["verdict"]
+
+
+# ---------------------------------------------------------------------------
+# 等 ACC 代价的对齐比较
+# ---------------------------------------------------------------------------
+def test_iso_acc_interpolates_between_measured_multipliers():
+    """高维随机方向天然是函数惰性的，所以必须按 ACC 代价而不是位移幅度对齐。"""
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("shuffled", 1.0, 0.30, 0.79),       # 代价 0.01
+            _cell("shuffled", 2.0, 0.20, 0.71)]       # 代价 0.09
+    iso = iso_acc_comparison(rows, acc_cost=0.05)
+    entry = iso["per_family"]["shuffled"]
+    # 0.05 落在 0.01 与 0.09 之间的一半处 -> ASR 在 0.30 与 0.20 的中点
+    assert np.isclose(entry["asr_at_cost"], 0.25)
+    assert entry["extrapolated"] is False
+    assert np.isclose(entry["asr_retained"], 0.25 / 0.40)
+
+
+def test_iso_acc_anchors_the_curve_at_the_zero_baseline():
+    """代价 0 处的 ASR 就是基线本身 —— 曲线必须从那里起。"""
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("real", 1.0, 0.10, 0.70)]           # 代价 0.10
+    entry = iso_acc_comparison(rows, acc_cost=0.05)["per_family"]["real"]
+    assert np.isclose(entry["asr_at_cost"], 0.25)     # (0.40 + 0.10) / 2
+
+
+def test_iso_acc_refuses_to_extrapolate_beyond_measured_cost():
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("shuffled", 1.0, 0.30, 0.79)]       # 最大代价才 0.01
+    entry = iso_acc_comparison(rows, acc_cost=0.05)["per_family"]["shuffled"]
+    assert np.isnan(entry["asr_at_cost"])
+    assert entry["extrapolated"] is True
+    assert np.isclose(entry["max_acc_cost_measured"], 0.01)
+
+
+def test_iso_acc_averages_seeds_before_interpolating():
+    rows = [_cell("zero", 0.0, 0.40, 0.80),
+            _cell("shuffled", 1.0, 0.20, 0.75, seed=0),
+            _cell("shuffled", 1.0, 0.40, 0.75, seed=1)]
+    entry = iso_acc_comparison(rows, acc_cost=0.05)["per_family"]["shuffled"]
+    assert np.isclose(entry["asr_at_cost"], 0.30)     # 两个 seed 先取均值
+
+
+def test_iso_acc_needs_the_zero_baseline():
+    assert "error" in iso_acc_comparison([_cell("real", 1.0, 0.1, 0.7)])
 
 
 def test_defaults_are_the_ones_the_plan_pins():
@@ -522,3 +572,51 @@ def test_calibrate_reports_a_missing_snapshot():
             assert "round_0350" in str(error)
         else:
             raise AssertionError("缺快照时应当报 FileNotFoundError")
+
+
+# ---------------------------------------------------------------------------
+# anchor_round：把扰动加到哪一轮的客户端模型上
+# ---------------------------------------------------------------------------
+def test_anchor_round_uses_the_round_snapshot_and_drops_clients_without_one():
+    """按轮次的客户端快照只覆盖被选中的那几个 —— 可评客户端数会掉，如实少返回。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1),
+                                n_benign=3, n_malicious=0)
+        # 只有 client 0 和 2 在 round_0200 上有快照
+        snap = root / "round_0200"
+        for cid in (0, 2):
+            (snap / f"client_{cid}.pt").write_text("stub", encoding="utf-8")
+        (root / "snapshot_manifest.json").write_text(json.dumps({"records": [
+            {"kind": "client", "client_id": 0, "grid_round": 200,
+             "staleness": 0},
+            {"kind": "client", "client_id": 2, "grid_round": 200,
+             "staleness": 3}]}), encoding="utf-8")
+
+        assert [int(r["client_id"]) for r in eval_clients(root, True)] == [0, 1, 2]
+        anchored = eval_clients(root, True, anchor_round=200)
+        assert [int(r["client_id"]) for r in anchored] == [0, 2]
+        # staleness 作为协变量带出来，不是丢掉
+        assert [r["anchor_staleness"] for r in anchored] == [0, 3]
+        assert client_checkpoint(root, 0, 200).parent.name == "round_0200"
+        assert client_checkpoint(root, 0, None).parent == root
+        assert client_checkpoint(root, 1, 200) is None
+
+
+def test_anchor_round_without_any_snapshot_client_raises_clearly():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1))
+        try:
+            eval_clients(root, True, anchor_round=200)
+        except ValueError as error:
+            assert "anchor_round=200" in str(error)
+        else:
+            raise AssertionError("该轮次没有任何客户端快照时应当报错")
+
+
+def test_dry_run_accepts_an_anchor_round():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _add_eval_inputs(_write_run(Path(tmp) / "run", drift=0.1))
+        (root / "round_0200" / "client_0.pt").write_text("s", encoding="utf-8")
+        assert main(["--mode", "eval", "--ckpt-dir", str(root),
+                     "--anchor-round", "200", "--multipliers", "1",
+                     "--seeds", "0", "--out-dir", str(Path(tmp) / "o")]) == 0

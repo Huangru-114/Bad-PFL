@@ -1,18 +1,32 @@
-"""T3：地板 0.41 是不是一个**宽盆**？—— 同幅度扰动 vs 真实漂移。
+"""T3：残留后门是被**幅度**打掉的，还是被**方向**打掉的？
 
 # 逻辑
 
 T0 实测（`PLAN_T0T4.md §9`）：攻击停止后的 200 轮干净训练把**实际参与聚合的
-参数**移动了相对幅度 **0.156**，方向与 θ 近似正交，而且是近正交增量的随机游走
+参数**移动了相对幅度 **0.156**，方向与 θ 近似正交，是近正交增量的随机游走
 —— 这么大的改写都没把 ASR 打下 0.41 的地板。
 
-于是问题变成：**这个地板是"参数空间里一个很宽的盆"，还是"真实漂移方向恰好特殊"？**
+T3 在**漂移之后**的模型上，沿不同方向再走同样一段，看谁能把残留打掉。
 
-    随机方向、同样幅度  ->  ASR 也不掉   =>  宽盆 => (c) 函数平坦
-    随机方向、同样幅度  ->  ASR 掉到迁移地板  =>  真实漂移方向特殊，
-                                              良性训练在**主动维持**后门 => 更像 (b)
+# ⚠️ 锚点语义（首跑后必须一次说清，初版在这里含糊过）
 
-`PLAN_T0T4.md §4` 对 T3 的要求原文是"**必须配随机方向对照**"，这就是它。
+默认锚点是 run 结束时的**个性化客户端模型**（r=400），也就是漂移**已经走完**
+的那个点。于是：
+
+- ``zero`` 格 = 那 200 轮良性漂移的**终点本身**，它的 ASR 就是地板；
+- ``real`` 格 = 沿同一方向**再外推**一段，**不是**复现那 200 轮。
+
+所以 T3 回答的是「**继续沿良性方向走** vs **随便走**，哪个更能打掉残留」，
+**不是**「那 200 轮为什么没打掉」。`--anchor-round 200` 可以把锚点换成刚植入
+完的模型（代价：按轮次的客户端快照只覆盖被选中的约 10 个良性客户端，且带
+staleness）。
+
+# ⚠️ 必须按**等 ACC 代价**比，不能只按等位移幅度（首跑暴露的方法论问题）
+
+1100 万维里随机方向几乎与损失面所有"陡"的方向正交，所以"随机扰动范数 0.078
+却几乎不改变函数"近乎同义反复。首跑数据直接证实：同样 0.078 的位移，随机族
+ACC 只掉 0.002–0.008，real 掉 0.047 —— 两者根本没在同一个"函数改变量"上比较。
+`iso_acc_comparison` 因此把各族插值到同一个 ACC 代价再比，判词以它为准。
 
 # 六个方向族（都只作用在**实际参与聚合**的参数上）
 
@@ -23,16 +37,16 @@ T0 实测（`PLAN_T0T4.md §9`）：攻击停止后的 200 轮干净训练把**�
 | `gaussian_layer_matched` | 逐层各向同性，**逐层**相对位移匹配真实漂移 | 公平对照：同幅度、同逐层剖面、方向随机 |
 | `shuffled` | 真实 Δθ 在**层内**随机置换坐标 | 保住幅度的边缘分布，打掉"是哪些坐标" |
 | `sign_flipped` | 真实 Δθ 逐坐标随机翻符号 | 保住幅度**与坐标**，只打掉方向的相干性 |
-| `real` | 真实 Δθ 本身 | 正对照：multiplier=1 就是再走一遍这 200 轮的位移 |
+| `real` | 真实 Δθ 本身 | 正对照：multiplier=1 = 沿良性方向再外推一整段 |
 
 `gaussian_layer_matched` 是主对照；`shuffled` / `sign_flipped` 把"幅度"与
 "坐标身份"、"方向相干性"逐层剥开，比单纯的高斯更能定位。
 
 # 必须与 ASR 一起报 ACC —— 否则整个实验没有意义
 
-把模型打坏也能让 ASR 掉。**只有在 ACC 基本不动的幅度上，ASR 不掉才叫宽盆。**
-所以每个格子都同时评 `asr` 与 `acc`，并且判词在 ACC 掉超过 `ACC_GUARD` 时
-拒绝对该幅度下任何 ASR 结论。这不是保守，是这个实验唯一能立住的读法。
+把模型打坏也能让 ASR 掉。所以每个格子都同时评 `asr` 与 `acc`，判词在 ACC 掉
+超过 `ACC_GUARD` 时拒绝对该幅度下的任何 ASR 结论，并且**主判据本身就建立在
+等 ACC 代价上**。这不是保守，是这个实验唯一能立住的读法。
 
 # 口径
 
@@ -54,7 +68,14 @@ T0 实测（`PLAN_T0T4.md §9`）：攻击停止后的 200 轮干净训练把**�
     # 2) GPU：真评（先看 dry-run 的格子数，再加 --execute）
     python -m diag.exp_t3 --mode eval \\
         --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \\
+        --data-root ./data --model-size 18 --device 0 \\
         --out-dir results/t3 --execute
+
+    # 3) 换锚点到刚植入完的模型（客户端数会掉到约 10 个，见上）
+    python -m diag.exp_t3 --mode eval --anchor-round 200 \\
+        --ckpt-dir checkpoints/attack_a0.5_s0_e1b_persist_s0 \\
+        --data-root ./data --model-size 18 --device 0 \\
+        --out-dir results/t3_r200 --execute
 """
 
 from __future__ import annotations
@@ -73,7 +94,8 @@ from .exp_t0 import AGGREGATED_KINDS, global_path, load_state, write_rows
 __all__ = ["FAMILIES", "ACC_GUARD", "make_direction", "scale_to_relative",
            "perturbation_profile", "build_recipes", "apply_perturbation",
            "recipe_key", "load_drift", "calibrate", "eval_clients",
-           "missing_eval_inputs", "append_row", "load_raw_rows",
+           "missing_eval_inputs", "iso_acc_comparison", "RANDOM_FAMILIES",
+           "append_row", "load_raw_rows",
            "load_done_keys",
            "evaluate_recipes", "aggregate_results", "flatness_verdict", "main"]
 
@@ -262,15 +284,91 @@ def apply_perturbation(state: Dict[str, np.ndarray], vector: np.ndarray,
 # ---------------------------------------------------------------------------
 # 判词
 # ---------------------------------------------------------------------------
+RANDOM_FAMILIES: Tuple[str, ...] = ("gaussian_global",
+                                    "gaussian_layer_matched", "shuffled",
+                                    "sign_flipped")
+
+
+def iso_acc_comparison(rows: Sequence[Dict[str, Any]],
+                       acc_cost: float = ACC_GUARD) -> Dict[str, Any]:
+    """**按等 ACC 代价**比各族的 ASR，而不是按等位移幅度。
+
+    # 为什么必须这么比（首跑暴露出来的方法论问题）
+
+    等位移幅度的比较有一个致命混杂：**在 1100 万维里，随机方向几乎与损失面所有
+    "陡"的方向正交**，所以"随机扰动范数 0.078 却几乎不改变函数"近乎同义反复。
+    首跑数据直接证实了这点 —— 同样 0.078 的位移，随机族 ACC 只掉 0.002–0.008，
+    而 real 掉 0.047。两者根本没在同一个"函数改变量"上比较。
+
+    正确的对齐量是**函数效果**，这里取最直接的一个：干净准确率的代价。
+    做法是按各族的 (ACC 代价, ASR) 曲线插值到同一个 ``acc_cost``，再比 ASR。
+    只有在这个坐标下随机方向仍然打不掉后门，"方向特殊"才立得住。
+
+    ``acc_cost`` 默认取 ``ACC_GUARD`` —— 预先写死的那个数，不是看完数据挑的。
+    落在实测区间之外时**返回 nan 并标 ``extrapolated``**，不外推。
+    """
+    baseline = [row for row in rows if row["family"] == "zero"]
+    if not baseline:
+        return {"error": "缺 zero 基线格，等代价比较无从谈起"}
+    acc0, asr0 = float(baseline[0]["acc"]), float(baseline[0]["asr"])
+
+    per_family: Dict[str, Dict[str, Any]] = {}
+    for family in sorted({str(row["family"]) for row in rows
+                          if row["family"] != "zero"}):
+        block = sorted((row for row in rows if row["family"] == family),
+                       key=lambda row: float(row["multiplier"]))
+        # 同一 multiplier 的多个 seed 先取均值，再按 ACC 代价排序
+        by_multiplier: Dict[float, List[Dict[str, Any]]] = {}
+        for row in block:
+            by_multiplier.setdefault(float(row["multiplier"]), []).append(row)
+        points = sorted(
+            ((acc0 - float(np.mean([float(r["acc"]) for r in group])),
+              float(np.mean([float(r["asr"]) for r in group])), multiplier)
+             for multiplier, group in by_multiplier.items()),
+            key=lambda point: point[0])
+        costs = [0.0] + [point[0] for point in points]
+        asrs = [asr0] + [point[1] for point in points]
+
+        entry: Dict[str, Any] = {"n_points": len(points)}
+        if acc_cost > max(costs):
+            entry.update({"asr_at_cost": float("nan"), "extrapolated": True,
+                          "max_acc_cost_measured": float(max(costs))})
+        else:
+            entry.update({"asr_at_cost": float(np.interp(acc_cost, costs,
+                                                         asrs)),
+                          "extrapolated": False})
+            spans = [point[2] for point in points if point[0] >= acc_cost]
+            entry["multiplier_at_cost"] = (float(min(spans)) if spans
+                                           else float("nan"))
+        if np.isfinite(entry["asr_at_cost"]) and asr0 > 0:
+            entry["asr_retained"] = entry["asr_at_cost"] / asr0
+        per_family[family] = entry
+
+    return {"acc_cost": float(acc_cost), "baseline_acc": acc0,
+            "baseline_asr": asr0, "per_family": per_family}
+
+
 def flatness_verdict(rows: Sequence[Dict[str, Any]],
                      acc_guard: float = ACC_GUARD) -> Dict[str, Any]:
-    """把 (族 × 幅度) 的 ASR/ACC 网格翻译成"宽盆还是方向特殊"。
+    """把 (族 × 幅度) 的 ASR/ACC 网格翻译成机制判词。
 
-    先用 ``zero`` 格建立基线，再**逐幅度**判：
+    # 这里的 `real` 是什么（首跑后必须写清楚的语义）
 
-    1. ACC 相对基线掉超过 ``acc_guard`` 的幅度 —— 该幅度下**不给 ASR 结论**。
-       模型被打坏时 ASR 掉是平凡的，读它等于自欺。
-    2. 在 ACC 站得住的最大幅度上，比随机方向族与 ``real`` 的 ASR。
+    锚点是**漂移之后**的模型（默认 r=400 的个性化模型）。所以：
+
+    - ``zero`` 格 = 真实的 200 轮良性漂移**已经走完**的那个点（ASR 的地板本身）；
+    - ``real`` 格 = 沿同一方向**再多走**一段（外推），**不是**复现那 200 轮。
+
+    因此判词问的是"**继续沿良性方向走**还是**随便走**，哪个更能打掉残留后门"，
+    而不是"那 200 轮为什么没打掉"。初版把这两件事混为一谈，判词因此在
+    `real` 明明把 ASR 打到 0.055 的情况下仍然报"宽盆" —— 那是错的，已修。
+
+    判据（两条都要，缺一不可）：
+
+    1. **ACC 闸门**：某一族在某个幅度上 ACC 相对基线掉超过 ``acc_guard``，
+       该格的 ASR 不参与结论 —— 模型被打坏时 ASR 掉是平凡的。
+    2. **等 ACC 代价**（`iso_acc_comparison`）：把各族插值到同一个 ACC 代价再比。
+       只按位移幅度比会被"高维随机方向天然是函数惰性的"这一条混杂掉。
 
     没有 ``zero`` 格就直接返回"未能确定" —— 没有基线的相对判断没有意义。
     """
@@ -285,20 +383,21 @@ def flatness_verdict(rows: Sequence[Dict[str, Any]],
     asr0 = float(baseline[0]["asr"])
     result.update({"baseline_acc": acc0, "baseline_asr": asr0})
 
-    usable: List[float] = []
+    # -- 逐幅度：ACC 闸门**逐族**判（一族被打坏不该连累另一族的可读性）------
     per_multiplier: Dict[str, Any] = {}
     for multiplier in sorted({float(r["multiplier"]) for r in rows
                               if r["family"] != "zero"}):
         block = [r for r in rows if float(r["multiplier"]) == multiplier
                  and r["family"] != "zero"]
-        worst_acc_drop = max(acc0 - float(r["acc"]) for r in block)
-        random_block = [r for r in block
-                        if r["family"].startswith("gaussian")
-                        or r["family"] in ("shuffled", "sign_flipped")]
-        entry = {
+        random_block = [r for r in block if r["family"] in RANDOM_FAMILIES]
+        real_block = [r for r in block if r["family"] == "real"]
+        entry: Dict[str, Any] = {
             "n": len(block),
-            "worst_acc_drop": float(worst_acc_drop),
-            "acc_ok": bool(worst_acc_drop <= acc_guard),
+            "worst_acc_drop": float(max(acc0 - float(r["acc"])
+                                        for r in block)),
+            "random_worst_acc_drop": (float(max(acc0 - float(r["acc"])
+                                                for r in random_block))
+                                      if random_block else float("nan")),
             "asr_random_mean": (float(np.mean([float(r["asr"])
                                                for r in random_block]))
                                 if random_block else float("nan")),
@@ -306,54 +405,87 @@ def flatness_verdict(rows: Sequence[Dict[str, Any]],
                                          for r in random_block))
                                if random_block else float("nan")),
         }
-        real_block = [r for r in block if r["family"] == "real"]
+        entry["random_acc_ok"] = bool(np.isfinite(entry["random_worst_acc_drop"])
+                                      and entry["random_worst_acc_drop"]
+                                      <= acc_guard)
         if real_block:
-            entry["asr_real"] = float(real_block[0]["asr"])
+            entry["asr_real"] = float(np.mean([float(r["asr"])
+                                               for r in real_block]))
+            entry["real_acc_drop"] = float(acc0 - np.mean(
+                [float(r["acc"]) for r in real_block]))
+            entry["real_acc_ok"] = bool(entry["real_acc_drop"] <= acc_guard)
+        entry["acc_ok"] = bool(entry["worst_acc_drop"] <= acc_guard)
         per_multiplier[f"{multiplier:g}"] = entry
-        if entry["acc_ok"]:
-            usable.append(multiplier)
     result["per_multiplier"] = per_multiplier
 
-    if not usable:
+    # -- 等 ACC 代价的对齐比较（主判据）--------------------------------------
+    iso = iso_acc_comparison(rows, acc_cost=acc_guard)
+    result["iso_acc"] = iso
+    families = iso.get("per_family", {})
+    real_entry = families.get("real", {})
+    random_values = [entry["asr_at_cost"] for name, entry in families.items()
+                     if name in RANDOM_FAMILIES
+                     and np.isfinite(entry.get("asr_at_cost", np.nan))]
+
+    if not real_entry or not np.isfinite(real_entry.get("asr_at_cost",
+                                                        np.nan)):
         result["verdict"] = (
-            f"未能确定：所有扰动幅度都把 ACC 打掉超过 {acc_guard}，"
-            f"没有一个幅度上的 ASR 是可读的。**不要**把这读成"
-            f"「扰动能消后门」—— 模型本身已经坏了。")
+            f"未能确定：`real` 族在 ACC 代价 {acc_guard} 处没有可读的点"
+            f"（实测的 ACC 代价区间没覆盖到它，本模块不外推）。"
+            f"补一个更小的 multiplier 再跑。")
+        return result
+    if not random_values:
+        result["verdict"] = (
+            f"未能确定：没有任何随机方向族在 ACC 代价 {acc_guard} 处可读，"
+            f"缺对照。随机族的 ACC 代价普遍偏小时要往上加 multiplier。")
         return result
 
-    largest = max(usable)
-    entry = per_multiplier[f"{largest:g}"]
-    result["largest_usable_multiplier"] = largest
-    asr_random = entry["asr_random_mean"]
-    result["asr_random_at_largest_usable"] = asr_random
-    if not np.isfinite(asr_random):
-        result["verdict"] = (f"未能确定：幅度 {largest:g} 上没有随机方向族的格子，"
-                             f"缺对照。")
-        return result
+    asr_real = float(real_entry["asr_at_cost"])
+    asr_random = float(np.mean(random_values))
+    real_retained = asr_real / asr0 if asr0 > 0 else float("nan")
+    random_retained = asr_random / asr0 if asr0 > 0 else float("nan")
+    result.update({
+        "iso_acc_cost": float(acc_guard),
+        "asr_real_at_iso_acc": asr_real,
+        "asr_random_at_iso_acc": asr_random,
+        "real_retained_fraction": real_retained,
+        "random_retained_fraction": random_retained,
+    })
 
-    retained = asr_random / asr0 if asr0 > 0 else float("nan")
-    result["asr_retained_fraction"] = retained
-    if not np.isfinite(retained):
+    anchor_note = ("（锚点是**漂移之后**的模型：`zero` 格就是那 200 轮良性漂移的"
+                   "终点，`real` 格是沿同一方向**再外推**一段，不是复现那 200 轮。"
+                   "口径：ASR 为 benign 个性化模型上的 target-排除口径。）")
+
+    if not (np.isfinite(real_retained) and np.isfinite(random_retained)):
         result["verdict"] = "未能确定：基线 ASR 为 0，保留比例无定义。"
-    elif retained >= 0.8:
+    elif random_retained >= 0.8 and real_retained <= 0.5:
         result["verdict"] = (
-            f"**宽盆**：在 ACC 还站得住的最大幅度（multiplier {largest:g}，"
-            f"ACC 最多掉 {entry['worst_acc_drop']:.4g}）上，随机方向扰动后 ASR "
-            f"仍有 {asr_random:.4g}，是基线 {asr0:.4g} 的 {retained:.0%}。"
-            f"地板不挂在特定参数值上 —— 这是 (c) 函数平坦的正面证据，"
-            f"并且意味着**参数空间的定点操作（剪枝/掩码/占位）原理上够不到它**。")
-    elif retained <= 0.4:
+            f"**方向特殊，不是幅度**：在**同样的 ACC 代价** {acc_guard:g} 上，"
+            f"沿良性方向继续走把 ASR 打到 {asr_real:.4g}（剩 {real_retained:.0%}），"
+            f"而幅度等价的随机方向只到 {asr_random:.4g}（剩 {random_retained:.0%}）。"
+            f"→ 后门的残留**不由位移幅度决定**；良性优化方向本身携带了任务信息，"
+            f"对后门有不成比例的破坏力。这**证伪了「任意同幅度扰动都出不了盆」"
+            f"的宽盆读法**，"
+            f"但也**不等于**证明了后门可被普通训练洗掉（`zero` 格自己就是 200 轮"
+            f"良性训练之后的结果，ASR 仍有 {asr0:.4g}）。" + anchor_note)
+    elif random_retained < 0.8 and real_retained <= 0.5:
         result["verdict"] = (
-            f"**方向特殊**：同幅度的随机方向把 ASR 从 {asr0:.4g} 打到 "
-            f"{asr_random:.4g}（保留 {retained:.0%}），而真实的 200 轮漂移没有。"
-            f"→ 良性训练的漂移方向不是随机的，它在**主动维持**后门。"
-            f"这削弱 (c)、指向 (b) 对齐共址，且说明参数空间路线还有戏。"
-            f"下一步应当去看真实漂移方向与后门方向的关系（T2 的符号一致率）。")
+            f"两者都有效：等 ACC 代价下 real 到 {asr_real:.4g}"
+            f"（剩 {real_retained:.0%}）、随机到 {asr_random:.4g}"
+            f"（剩 {random_retained:.0%}）。方向仍然更强，但随机方向也压得动，"
+            f"说明幅度本身有贡献。**不要**只报 real。" + anchor_note)
+    elif random_retained >= 0.8 and real_retained > 0.5:
+        result["verdict"] = (
+            f"**宽盆**：等 ACC 代价 {acc_guard:g} 上，real 与随机方向都打不掉后门"
+            f"（剩 {real_retained:.0%} / {random_retained:.0%}）。"
+            f"地板不挂在特定参数值上 —— (c) 函数平坦的正面证据，"
+            f"且意味着参数空间的定点操作（剪枝/掩码/占位）原理上够不到它。"
+            + anchor_note)
     else:
         result["verdict"] = (
-            f"中间情形：随机方向下 ASR 保留 {retained:.0%}"
-            f"（{asr0:.4g} → {asr_random:.4g}），既不能说宽盆也不能说方向特殊。"
-            f"如实报数，**不要**据此选边。")
+            f"中间情形：等 ACC 代价下 real 剩 {real_retained:.0%}、"
+            f"随机剩 {random_retained:.0%}，两个阈值都没跨过。"
+            f"如实报数，**不要**据此选边。" + anchor_note)
     return result
 
 
@@ -446,22 +578,80 @@ def _client_accuracy(model: Any, loader: Any, device: Any) -> Dict[str, float]:
             "n_acc_samples": int(total)}
 
 
+def client_checkpoint(ckpt_dir, client_id: int,
+                      anchor_round: Optional[int] = None) -> Optional[Path]:
+    """要往上加扰动的那个客户端模型的路径；不存在返回 ``None``。
+
+    ``anchor_round=None`` 用 run **根目录**的 ``client_<cid>.pt``
+    （`hooks.save_run` 写的最终模型，全部 40 个都有）。
+
+    给了 ``anchor_round`` 就改用 ``round_XXXX/client_<cid>.pt``
+    —— 那是 `SnapshotRecorder` 写的，**只覆盖被选中的快照客户端**
+    （`config.yaml` 的 `snapshot_n_benign: 10` + `snapshot_n_malicious: 2`），
+    而且带 staleness（存的是"该网格点之后该客户端首次参与后的模型"）。
+    所以换 anchor 会把可评客户端数从 36 降到约 10，这是数据本身的限制，
+    不是可以绕开的参数 —— `eval_clients` 会如实少返回，不补齐。
+    """
+    ckpt_dir = Path(ckpt_dir)
+    if anchor_round is None:
+        path = ckpt_dir / f"client_{int(client_id)}.pt"
+    else:
+        path = (ckpt_dir / f"round_{int(anchor_round):04d}"
+                / f"client_{int(client_id)}.pt")
+    return path if path.exists() else None
+
+
+def client_staleness(ckpt_dir, anchor_round: Optional[int]
+                     ) -> Dict[int, int]:
+    """从 ``snapshot_manifest.json`` 取各客户端在该网格点的 staleness。
+
+    staleness = 实际保存轮次 − 网格轮次 ≥ 0。它是**协变量，不是噪声**：
+    anchor 名义上是 r=200，实际可能是该客户端 r=203 才参与后的模型。
+    manifest 缺失时返回空字典 —— 缺就缺，不编。
+    """
+    if anchor_round is None:
+        return {}
+    path = Path(ckpt_dir) / "snapshot_manifest.json"
+    if not path.exists():
+        return {}
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    return {int(record["client_id"]): int(record["staleness"])
+            for record in manifest.get("records", [])
+            if record.get("kind") == "client"
+            and int(record.get("grid_round", -1)) == int(anchor_round)}
+
+
 def eval_clients(ckpt_dir, benign_only: bool = True,
-                 max_clients: Optional[int] = None) -> List[Dict[str, Any]]:
+                 max_clients: Optional[int] = None,
+                 anchor_round: Optional[int] = None) -> List[Dict[str, Any]]:
     """要评的客户端记录。``max_clients`` 取**编号最小的前 N 个**（确定性）。
 
     默认只评良性客户端：恶意客户端的 ASR≈1.0，混进均值里会把地板抬起来，
     而地板讲的是**受害者**模型上还剩多少。
+
+    ``anchor_round`` 非空时**只保留该轮次真有快照的客户端**，并把 staleness
+    附在记录上（`anchor_staleness`）。少了就少了，如实返回。
     """
     meta = json.loads((Path(ckpt_dir) / "meta.json").read_text())
     clients = sorted((record for record in meta["clients"]
                       if record.get("test_indices")
                       and not (benign_only and record["is_malicious"])),
                      key=lambda record: int(record["client_id"]))
+    if anchor_round is not None:
+        staleness = client_staleness(ckpt_dir, anchor_round)
+        kept = []
+        for record in clients:
+            cid = int(record["client_id"])
+            if client_checkpoint(ckpt_dir, cid, anchor_round) is not None:
+                kept.append({**record,
+                             "anchor_staleness": staleness.get(cid, None)})
+        clients = kept
     if not clients:
         raise ValueError(
-            f"{ckpt_dir}/meta.json 里没有可评的客户端"
-            f"（缺 test_indices？benign_only={benign_only}）")
+            f"{ckpt_dir} 在 anchor_round={anchor_round} 上没有可评的客户端"
+            f"（benign_only={benign_only}）。按轮次的客户端快照只覆盖 "
+            f"snapshot_n_benign + snapshot_n_malicious 个被选中的客户端；"
+            f"要全部 40 个只能用 anchor_round=None 的最终模型。")
     if max_clients is not None and max_clients > 0:
         clients = clients[:int(max_clients)]
     return clients
@@ -469,7 +659,8 @@ def eval_clients(ckpt_dir, benign_only: bool = True,
 
 def missing_eval_inputs(ckpt_dir, drift_from: int = 200, drift_to: int = 400,
                         benign_only: bool = True,
-                        max_clients: Optional[int] = None) -> List[str]:
+                        max_clients: Optional[int] = None,
+                        anchor_round: Optional[int] = None) -> List[str]:
     """``--mode eval`` 需要、但这个 run 目录里缺掉的东西。
 
     dry-run 会先跑这一遍：**一次把缺的全报齐**，而不是让 GPU 作业排队两小时后
@@ -490,10 +681,17 @@ def missing_eval_inputs(ckpt_dir, drift_from: int = 200, drift_to: int = 400,
             missing.append(str(ckpt_dir / f"round_{round_index:04d}"
                                / "global.pt"))
     if (ckpt_dir / "meta.json").exists():
-        for record in eval_clients(ckpt_dir, benign_only, max_clients):
-            path = ckpt_dir / f"client_{int(record['client_id'])}.pt"
-            if not path.exists():
-                missing.append(str(path))
+        try:
+            clients = eval_clients(ckpt_dir, benign_only, max_clients,
+                                   anchor_round)
+        except ValueError as error:
+            missing.append(str(error))
+            return missing
+        for record in clients:
+            if client_checkpoint(ckpt_dir, int(record["client_id"]),
+                                 anchor_round) is None:
+                missing.append(str(ckpt_dir / f"client_"
+                                   f"{int(record['client_id'])}.pt"))
     return missing
 
 
@@ -553,6 +751,7 @@ def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
                      model_size: int, device: Any, batch_size: int = 128,
                      benign_only: bool = True,
                      max_clients: Optional[int] = None,
+                     anchor_round: Optional[int] = None,
                      raw_path=None, resume: bool = False
                      ) -> List[Dict[str, Any]]:
     """把扰动加到**每个客户端自己的最终个性化模型**上，评 ASR + ACC，返回逐格的原始行。
@@ -589,7 +788,7 @@ def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
 
     # 扰动由「全局快照的漂移」定义，与客户端无关；索引/子空间与 calibrate 共用
     theta, delta_real, index, _ = load_drift(ckpt_dir, drift_from, drift_to)
-    clients = eval_clients(ckpt_dir, benign_only, max_clients)
+    clients = eval_clients(ckpt_dir, benign_only, max_clients, anchor_round)
     done = load_done_keys(raw_path) if (resume and raw_path) else set()
     if done:
         print(f"[exp_t3] 续跑：raw CSV 里已有 {len(done)} 个格子，跳过它们")
@@ -603,8 +802,12 @@ def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
             print(f"[exp_t3] client {cid} 全部格子已完成，跳过")
             continue
 
+        anchor_path = client_checkpoint(ckpt_dir, cid, anchor_round)
+        if anchor_path is None:                 # eval_clients 已过滤，这里兜底
+            raise FileNotFoundError(
+                f"client {cid} 在 anchor_round={anchor_round} 上没有快照")
         model = load_client_model(
-            ckpt_dir / f"client_{cid}.pt",
+            anchor_path,
             lambda: get_resnet(size=int(model_size), num_classes=num_classes),
             device)
         base_state = {key: value.detach().cpu().numpy().copy()
@@ -626,6 +829,9 @@ def evaluate_recipes(ckpt_dir, recipes: Sequence[Dict[str, Any]],
             accuracy = _client_accuracy(model, loader, device)
             row = {"run_id": ckpt_dir.name, "recipe_key": recipe_key(recipe),
                    **recipe, "client_id": cid,
+                   "anchor_round": ("" if anchor_round is None
+                                    else int(anchor_round)),
+                   "anchor_staleness": record.get("anchor_staleness", ""),
                    "is_malicious": bool(record["is_malicious"]), **asr,
                    **accuracy}
             rows.append(row)
@@ -697,6 +903,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--device", default="0")
     parser.add_argument("--include-malicious", action="store_true",
                         help="也评恶意客户端（默认只评良性 —— 地板讲的是受害者）")
+    parser.add_argument("--anchor-round", type=int, default=None,
+                        help="把扰动加到哪一轮的客户端模型上。缺省 = run 根目录的"
+                             "最终模型（r=total_round，全部客户端）；给 200 就用 "
+                             "round_0200/client_*.pt —— 但那只覆盖被选中的快照"
+                             "客户端（约 10 个良性），且带 staleness")
     parser.add_argument("--max-clients", type=int, default=None,
                         help="只评编号最小的前 N 个客户端（先跑小规模试水用）")
     parser.add_argument("--raw-out", default="",
@@ -746,7 +957,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     raw_path = Path(args.raw_out) if args.raw_out else out_dir / "t3_raw.csv"
 
     missing = missing_eval_inputs(args.ckpt_dir, args.drift_from, args.drift_to,
-                                  not args.include_malicious, args.max_clients)
+                                  not args.include_malicious, args.max_clients,
+                                  args.anchor_round)
     if missing:
         print(f"[exp_t3] ✗ 这个 run 目录缺 {len(missing)} 个 eval 需要的文件：")
         for path in missing[:20]:
@@ -760,7 +972,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not args.execute:
         clients = eval_clients(args.ckpt_dir, not args.include_malicious,
-                               args.max_clients)
+                               args.max_clients, args.anchor_round)
         done = load_done_keys(raw_path) if args.resume else set()
         cells = len(recipes) * len(clients) - len(done)
         samples = sum(len(record["test_indices"]) for record in clients)
@@ -796,7 +1008,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                      test_dataset, model_size=args.model_size, device=device,
                      batch_size=args.batch_size,
                      benign_only=not args.include_malicious,
-                     max_clients=args.max_clients, raw_path=raw_path,
+                     max_clients=args.max_clients,
+                     anchor_round=args.anchor_round, raw_path=raw_path,
                      resume=args.resume)
 
     # 从 raw CSV 聚合（而不是只用本次跑出来的行）—— 续跑时旧格子也要算进去

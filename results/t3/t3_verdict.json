@@ -2,43 +2,103 @@
   "n_cells": 53,
   "acc_guard": 0.05,
   "baseline_acc": 0.8242222222222222,
-  "baseline_asr": 0.36368519704363167,
+  "baseline_asr": 0.3636851970436316,
   "per_multiplier": {
     "0.5": {
       "n": 13,
       "worst_acc_drop": 0.04699999999999993,
-      "acc_ok": true,
-      "asr_random_mean": 0.35470086142634955,
-      "asr_random_min": 0.30618524394922386,
-      "asr_real": 0.05530300590629076
+      "random_worst_acc_drop": 0.010444444444444478,
+      "asr_random_mean": 0.35470086142634943,
+      "asr_random_min": 0.3061852439492238,
+      "random_acc_ok": true,
+      "asr_real": 0.0553030059062907,
+      "real_acc_drop": 0.04699999999999993,
+      "real_acc_ok": true,
+      "acc_ok": true
     },
     "1": {
       "n": 13,
       "worst_acc_drop": 0.16144444444444428,
-      "acc_ok": false,
+      "random_worst_acc_drop": 0.05599999999999994,
       "asr_random_mean": 0.3401952492990356,
-      "asr_random_min": 0.22799455466147858,
-      "asr_real": 0.005711693394446594
+      "asr_random_min": 0.2279945546614785,
+      "random_acc_ok": false,
+      "asr_real": 0.0057116933944465,
+      "real_acc_drop": 0.16144444444444428,
+      "real_acc_ok": false,
+      "acc_ok": false
     },
     "2": {
       "n": 13,
       "worst_acc_drop": 0.4642222222222222,
-      "acc_ok": false,
+      "random_worst_acc_drop": 0.3168888888888888,
       "asr_random_mean": 0.3063001793152725,
-      "asr_random_min": 0.09367806425699304,
-      "asr_real": 0.0005570753766118702
+      "asr_random_min": 0.093678064256993,
+      "random_acc_ok": false,
+      "asr_real": 0.0005570753766118,
+      "real_acc_drop": 0.4642222222222222,
+      "real_acc_ok": false,
+      "acc_ok": false
     },
     "4": {
       "n": 13,
-      "worst_acc_drop": 0.7095555555555555,
-      "acc_ok": false,
-      "asr_random_mean": 0.20348383166233588,
-      "asr_random_min": 0.00011337868480725624,
-      "asr_real": 0.0
+      "worst_acc_drop": 0.7095555555555556,
+      "random_worst_acc_drop": 0.6515555555555556,
+      "asr_random_mean": 0.20348383166233586,
+      "asr_random_min": 0.0001133786848072,
+      "random_acc_ok": false,
+      "asr_real": 0.0,
+      "real_acc_drop": 0.7095555555555556,
+      "real_acc_ok": false,
+      "acc_ok": false
     }
   },
-  "largest_usable_multiplier": 0.5,
-  "asr_random_at_largest_usable": 0.35470086142634955,
-  "asr_retained_fraction": 0.975296394545846,
-  "verdict": "**宽盆**：在 ACC 还站得住的最大幅度（multiplier 0.5，ACC 最多掉 0.047）上，随机方向扰动后 ASR 仍有 0.3547，是基线 0.3637 的 98%。地板不挂在特定参数值上 —— 这是 (c) 函数平坦的正面证据，并且意味着**参数空间的定点操作（剪枝/掩码/占位）原理上够不到它**。"
+  "iso_acc": {
+    "acc_cost": 0.05,
+    "baseline_acc": 0.8242222222222222,
+    "baseline_asr": 0.3636851970436316,
+    "per_family": {
+      "gaussian_global": {
+        "n_points": 4,
+        "asr_at_cost": 0.34244644170704813,
+        "extrapolated": false,
+        "multiplier_at_cost": 4.0,
+        "asr_retained": 0.9416012652996832
+      },
+      "gaussian_layer_matched": {
+        "n_points": 4,
+        "asr_at_cost": 0.39929031379158214,
+        "extrapolated": false,
+        "multiplier_at_cost": 4.0,
+        "asr_retained": 1.097900923758739
+      },
+      "real": {
+        "n_points": 4,
+        "asr_at_cost": 0.05400303946180543,
+        "extrapolated": false,
+        "multiplier_at_cost": 1.0,
+        "asr_retained": 0.1484884177326762
+      },
+      "shuffled": {
+        "n_points": 4,
+        "asr_at_cost": 0.24615812340743454,
+        "extrapolated": false,
+        "multiplier_at_cost": 2.0,
+        "asr_retained": 0.6768439447314176
+      },
+      "sign_flipped": {
+        "n_points": 4,
+        "asr_at_cost": 0.3402689059937825,
+        "extrapolated": false,
+        "multiplier_at_cost": 4.0,
+        "asr_retained": 0.9356138461499167
+      }
+    }
+  },
+  "iso_acc_cost": 0.05,
+  "asr_real_at_iso_acc": 0.05400303946180543,
+  "asr_random_at_iso_acc": 0.33204094622496183,
+  "real_retained_fraction": 0.1484884177326762,
+  "random_retained_fraction": 0.9129899949849392,
+  "verdict": "**方向特殊，不是幅度**：在**同样的 ACC 代价** 0.05 上，沿良性方向继续走把 ASR 打到 0.054（剩 15%），而幅度等价的随机方向只到 0.332（剩 91%）。→ 后门的残留**不由位移幅度决定**；良性优化方向本身携带了任务信息，对后门有不成比例的破坏力。这**证伪了「任意同幅度扰动都出不了盆」的宽盆读法**，但也**不等于**证明了后门可被普通训练洗掉（`zero` 格自己就是 200 轮良性训练之后的结果，ASR 仍有 0.3637）。（锚点是**漂移之后**的模型：`zero` 格就是那 200 轮良性漂移的终点，`real` 格是沿同一方向**再外推**一段，不是复现那 200 轮。口径：ASR 为 benign 个性化模型上的 target-排除口径。）"
 }
