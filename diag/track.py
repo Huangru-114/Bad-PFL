@@ -29,7 +29,7 @@ import contextlib
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -91,6 +91,12 @@ IMPLANTATION_COLUMNS = [
     # 只对良性求平均且经 δ/ξ 重建，两者不可混。asr_paper_all 才对齐 main.py 的
     # "Avg ASR"（全体客户端均值）。
     "asr_paper_benign", "asr_paper_malicious", "asr_paper_all",
+    # 同一批前向里算出的 **filtered** 口径：排除真实标签已经是目标类的样本，
+    # 与 tf-dpfl 的 attack/backdoor_eval.py:41 同分母，也与报告 §2 写的定义一致。
+    # 此前只有 recompute_asr_final 能出 filtered，而它只能算最终轮
+    # （逐轮的 per-client 模型没有存）。CIFAR-10 下 filtered ≈ (unfiltered−0.1)/0.9。
+    "asr_paper_filtered_benign", "asr_paper_filtered_malicious",
+    "asr_paper_filtered_all",
     # B 线：停攻点冻结触发器后的 ASR（仅 --freeze-trigger-eval 的 persist 跑有值，
     # 停攻前为 nan）。asr_paper_all 是在线 ξ（A/C 线），这个是完全固定触发器。
     "asr_paper_frozen_benign", "asr_paper_frozen_malicious",
@@ -331,15 +337,29 @@ class TrainingTracker:
             "n_clean_eval_samples": n_seen,
         }
 
-    def _paper_asr(self, model: Any, test_loader: Any) -> float:
-        """论文口径 ASR = ``utils.evaluate_accuracy(model, loader, full_poison_func)``。
+    def _paper_asr(self, model: Any, test_loader: Any) -> "Tuple[float, float]":
+        """论文口径 ASR，同时返回 ``(unfiltered, filtered)``。
 
         逐行复刻 ``main.py:131``：给该客户端**自己的** test loader 里的每张图打
         完整触发器（``self.paper_eval_func`` = poison_ratio=1.0 的原始
         ``full_poison_func``，δ 用训练中的真生成器、ξ 用原始 ``pgd_attack``），
         标签全改 ``target_class``，统计 ``argmax == target_class`` 的比例。
 
-        - **不过滤目标类样本**（分母是全部样本），与论文一致；
+        - ``unfiltered``：**不过滤目标类样本**（分母是全部样本），逐行复刻
+          ``main.py:131``，是本仓库此前唯一的口径，列名 ``asr_paper_*``；
+        - ``filtered``：**排除真实标签已经是目标类的样本**（分母是非目标类样本），
+          即社区通行口径，列名 ``asr_paper_filtered_*``。
+
+        为什么两个都要：本仓库的主 ASR 一直是 unfiltered，而 tf-dpfl 那边
+        （``attack/backdoor_eval.py:41``）是 filtered，报告 §2 写的定义也是
+        「排除目标类」——**两库的数字此前不在同一个分母上，却被并排讨论**。
+        两个口径在**同一次前向**里就能同时算出来（原始标签本来就在手边），
+        所以补这一列是零额外机时；此前只有 ``recompute_asr_final`` 能出 filtered，
+        而它只能算最终轮（逐轮的 per-client 模型没有存）。
+
+        CIFAR-10 均匀分布下目标类约占 1/10，所以
+        ``filtered ≈ (unfiltered − 0.1) / 0.9``，两者会有约 10 个百分点的系统差 ——
+        这正是「口径不一致」能造成的量级。
         - ``model`` 强制 ``eval()``（``utils.evaluate_accuracy`` 也是 eval），
           返回前恢复；
         - ``full_poison_func`` 内部的 PGD 需要梯度,故**不**套 ``no_grad``;
@@ -348,11 +368,12 @@ class TrainingTracker:
         - 返回 ``[0, 1]`` 的比例（不是百分比）；缺 loader / 无攻击时返回 nan。
         """
         if self.paper_eval_func is None or test_loader is None:
-            return float("nan")
+            return float("nan"), float("nan")
         target = int(self.target_class)
         was_training = model.training
         model.eval()
-        n_correct, n_total = 0, 0
+        n_hit, n_total = 0, 0                 # unfiltered：分母 = 全部样本
+        n_hit_f, n_total_f = 0, 0             # filtered：分母 = 真实标签非目标类
         try:
             for batch in test_loader:
                 images = batch[0].to(self.device)
@@ -363,12 +384,19 @@ class TrainingTracker:
                 perturbed, _ = self.paper_eval_func(images, labels)
                 with torch.no_grad():
                     preds = model(perturbed).argmax(dim=1)
-                n_correct += int((preds == target).sum())
+                hit = (preds == target)
+                n_hit += int(hit.sum())
                 n_total += int(labels.numel())
+                # 同一次前向里顺手算 filtered —— 零额外开销
+                eligible = (labels != target)
+                n_hit_f += int((hit & eligible).sum())
+                n_total_f += int(eligible.sum())
         finally:
             if was_training:
                 model.train()
-        return n_correct / n_total if n_total else float("nan")
+        unfiltered = n_hit / n_total if n_total else float("nan")
+        filtered = n_hit_f / n_total_f if n_total_f else float("nan")
+        return unfiltered, filtered
 
     def _snapshot_frozen_trigger(self, clients_to_cache: Sequence[Any]) -> None:
         """停攻点：把每个客户端的 (x+ξ+δ) 评估图快照到 CPU，之后复用。
@@ -532,9 +560,12 @@ class TrainingTracker:
         # 均值，近似 main.py 遍历全体客户端的 "Avg ASR"（这里是评估子集上的近似,
         # 不是全 40 个客户端；要全量就把 eval_client_ids 放到全部良性）。
         paper_by_cid: Dict[int, float] = {}
+        paper_filtered_by_cid: Dict[int, float] = {}
         for client in eval_clients + malicious_clients:
-            paper_by_cid[int(client.cid)] = self._paper_asr(
+            unfiltered, filtered = self._paper_asr(
                 client.local_model, getattr(client, "test_dataloader", None))
+            paper_by_cid[int(client.cid)] = unfiltered
+            paper_filtered_by_cid[int(client.cid)] = filtered
         # full_poison_func 内部 PGD 会把梯度累加进被绑定的恶意客户端模型；
         # client.py 在下次本地训练取数前会 zero_grad，本无副作用，但按诊断惯例
         # 主动清掉,避免与 layer_metrics 等其它读操作相互干扰。
@@ -543,16 +574,22 @@ class TrainingTracker:
             if model is not None:
                 model.zero_grad(set_to_none=True)
 
-        def _paper_mean(cids: Sequence[int]) -> float:
-            values = [paper_by_cid[i] for i in cids
-                      if np.isfinite(paper_by_cid.get(i, float("nan")))]
+        def _mean_over(source: Dict[int, float], cids: Sequence[int]) -> float:
+            values = [source[i] for i in cids
+                      if np.isfinite(source.get(i, float("nan")))]
             return float(np.mean(values)) if values else float("nan")
 
         benign_cids = [int(c.cid) for c in eval_clients]
         malicious_cids = [int(c.cid) for c in malicious_clients]
-        asr_paper_benign = _paper_mean(benign_cids)
-        asr_paper_malicious = _paper_mean(malicious_cids)
-        asr_paper_all = _paper_mean(benign_cids + malicious_cids)
+        asr_paper_benign = _mean_over(paper_by_cid, benign_cids)
+        asr_paper_malicious = _mean_over(paper_by_cid, malicious_cids)
+        asr_paper_all = _mean_over(paper_by_cid, benign_cids + malicious_cids)
+        # 同一批前向里算出的 filtered 口径（排除真实标签已是目标类的样本）。
+        # 与 tf-dpfl 的 backdoor_eval.py:41 同分母，两库这才能同框比较。
+        asr_paper_filtered_benign = _mean_over(paper_filtered_by_cid, benign_cids)
+        asr_paper_filtered_malicious = _mean_over(paper_filtered_by_cid, malicious_cids)
+        asr_paper_filtered_all = _mean_over(paper_filtered_by_cid,
+                                            benign_cids + malicious_cids)
 
         # --- B 线：冻结触发器 ASR（停攻点快照后才有值） ---
         frozen_by_cid = self._maybe_frozen_asr(eval_clients, malicious_clients)
@@ -608,6 +645,9 @@ class TrainingTracker:
             "asr_unfiltered": _mean("asr_unfiltered"),
             # 论文口径（exp1 的主 ASR）
             "asr_paper_benign": asr_paper_benign,
+            "asr_paper_filtered_benign": asr_paper_filtered_benign,
+            "asr_paper_filtered_malicious": asr_paper_filtered_malicious,
+            "asr_paper_filtered_all": asr_paper_filtered_all,
             "asr_paper_malicious": asr_paper_malicious,
             "asr_paper_all": asr_paper_all,
             # B 线：冻结触发器 ASR（停攻前 / 未开该模式为 nan）

@@ -54,6 +54,7 @@ TEST_MODULES = [
     "diag.tests.test_exp_t0",
     "diag.tests.test_exp_t3",
     "diag.tests.test_pfl_fedrep",
+    "diag.tests.test_paper_asr_filtered",
 ]
 
 

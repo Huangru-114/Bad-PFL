@@ -889,8 +889,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "asr_paper_all（含攻击者，会随 N_m 机械抬高，对齐 "
                              "main.py 的 Avg ASR）/ asr_paper_malicious，或旧口径 "
                              "asr_personalized_targeted。缺列时自动回退。三档并列见 "
-                             "E1-6。注意：均为 unfiltered（含目标类）；target-排除的"
-                             "精确口径要用 diag.recompute_asr_final（最终轮）。")
+                             "E1-6。\n"
+                             "**口径**：asr_paper_* 是 unfiltered（分母含目标类，"
+                             "逐行复刻 main.py:131）；asr_paper_filtered_* 是 "
+                             "filtered（排除真实标签已是目标类的样本），与 tf-dpfl "
+                             "的 backdoor_eval.py:41 同分母、也与报告 §2 写的定义"
+                             "一致。CIFAR-10 下两者差约 10 个百分点。**跨库比较或"
+                             "对外报数一律用 filtered**。旧 run 没有 filtered 列，"
+                             "会自动回退并打印提示；只想要最终轮的精确 filtered "
+                             "也可以用 diag.recompute_asr_final。")
     args = parser.parse_args(argv)
 
     frame = load_runs(args.implantation_glob)
