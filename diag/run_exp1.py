@@ -95,7 +95,8 @@ def _tag(prefix: str, **parts: Any) -> str:
 def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
                   instrument_root: str, results_dir: str,
                   ckpt_root: str, total_round: Optional[int] = None,
-                  pfl: str = "fedbn", layer_metrics: bool = False
+                  pfl: str = "fedbn", layer_metrics: bool = False,
+                  local_steps: Optional[int] = None
                   ) -> List[str]:
     """一条 run_fl 命令。
 
@@ -111,6 +112,7 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
     而这些量根本不进 CSV。检测类实验（I/J）才读 npz，那时显式开。
     """
     rounds = int(cfg_exp1.total_round if total_round is None else total_round)
+    steps = int(cfg_exp1.local_steps if local_steps is None else local_steps)
     cmd = [
         "python", "-m", "diag.run_fl",
         "--mode", "attack",
@@ -119,7 +121,7 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
         "--defense", "fedavg",
         "--client-num", str(int(cfg_exp1.client_num)),
         "--select-per-round", str(int(cfg_exp1.select_per_round)),
-        "--local-steps", str(int(cfg_exp1.local_steps)),
+        "--local-steps", str(steps),
         "--model-size", str(int(cfg_exp1.model_size)),
         "--total-round", str(rounds),
         "--eval-every", str(int(cfg_exp1.eval_every)),
@@ -222,6 +224,53 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                              "csv": implantation_csv(results_dir, alpha, seed,
                                                      tag)})
 
+    if stage == "calib":
+        # ── Stage B 标定（导师意见 #5）──────────────────────────────────
+        # 唯一自变量 = local_steps。剂量固定在十字扫描的交叉点
+        # (bad_num_fixed, poison_rate_fixed)，因为标定要问的是「训练多久够」，
+        # 不是「打多重」—— 两者同时变就分不清是谁让曲线提前平的。
+        #
+        # 与 tf-dpfl 侧 (local_epochs ∈ {1,3,5}) 同构：那边一个 epoch 是整个
+        # 本地数据集一遍，这边 15 steps × batch 32 ≈ 0.38 epoch。**两库的
+        # "local budget" 单位不同**，所以标定各做各的，只共享读数口径。
+        #
+        # 顺带更正报告 §2 的「1 local epoch」——Exp 1 从来就不是 1 个 epoch。
+        # 用 `in` + 属性访问，不用 .get —— Cfg.__getattr__ 会把嵌套 dict 包成
+        # Cfg（于是 calib.total_round 可用），而继承来的 dict.get 不会包，
+        # 拿回来的是裸 dict、点号访问直接 AttributeError。persist 分支同此写法。
+        if "calibration" not in exp1:
+            raise ValueError(
+                "stage=calib 需要 config.yaml 的 exp1.calibration 段"
+                "（local_steps / total_round / eval_every）")
+        calib = exp1.calibration
+        bad = int(exp1.bad_num_fixed)
+        rate = float(exp1.poison_rate_fixed)
+        total = int(calib.total_round)
+        every = int(calib.eval_every)
+        for steps in calib.local_steps:
+            for seed in seeds:
+                # **local_steps 必须进 tag**：CSV 路径只由 (alpha, seed, tag) 决定，
+                # 三格共用 tag 就是第二格覆盖第一格，而 --skip-existing 还会因为
+                # 「文件已存在且有 asr_paper_all 列」把后两格整个跳过。
+                tag = _tag(_arm_prefix("e1calib", pfl), steps=int(steps), s=seed)
+                cmd = _base_command(exp1, seed, alpha, instrument_root,
+                                    results_dir, ckpt_root, pfl=pfl,
+                                    total_round=total, layer_metrics=layer_metrics,
+                                    local_steps=int(steps))
+                # eval_every 也要覆盖：标定要密的轨迹才看得出拐点。
+                # _base_command 里已经放了一个 --eval-every，这里直接改那一项，
+                # 而不是再 append 一个（argparse 取最后一个，但两个值并存的命令
+                # 事后没法判读跑的是哪个）。
+                cmd[cmd.index("--eval-every") + 1] = str(every)
+                cmd += ["--bad-client-num", str(bad),
+                        "--poison-rate", str(rate),
+                        "--run-tag", tag]
+                jobs.append({"tag": tag, "stage": "calib", "cmd": cmd,
+                             "describe": (f"calibration: local_steps={steps} "
+                                          f"@ Nm={bad}, rho={rate}, "
+                                          f"{total} rounds, eval every {every}"),
+                             "csv": implantation_csv(results_dir, alpha, seed, tag)})
+
     if stage in ("persist", "all") and "persistence" in exp1:
         # B2 专用长跑：攻击窗口 [start, end) 把 ASR 顶到高位，再干净训练到 total。
         # 用 burst(start, end-start) 表达；burst 之后自动是干净轮次。
@@ -303,7 +352,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "的 hier_fedrep 对齐）。**它会进 run tag**，两条臂的"
                              "产物互不覆盖；fedbn 保持原命名以便续跑。")
     parser.add_argument("--stage", default="all",
-                        choices=["1", "1b", "persist", "all"])
+                        choices=["1", "1b", "persist", "calib", "all"],
+                        help="calib = Stage B 收敛标定（local_steps 扫描）。"
+                             "**不含在 all 里** —— 它用的是缩短的预算与加密的"
+                             "评估点，和主力格子不可比，混进去会污染并表。")
     parser.add_argument("--seeds", type=int, nargs="*", default=None)
     parser.add_argument("--full-grid", action="store_true",
                         help="全因子而不是十字扫描。第一阶段不要用 —— "

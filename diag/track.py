@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -188,6 +189,11 @@ class TrainingTracker:
     _frozen_batches: Dict[int, Any] = field(default_factory=dict)
     _frozen_taken: bool = False
     _attack_ever_active: bool = False
+    # 墙钟（Stage B 标定）：train_wall_s = 本轮训练+聚合；eval_wall_s = 本轮评估。
+    # 两段分开量：标定要回答的「降轮数还是提 local_steps 更划算」完全取决于
+    # 二者的比例，而合成一个总数就答不了。None = 还没量到（不是 0）。
+    _t_round_begin: Optional[float] = None
+    _t_train_s: Optional[float] = None
 
     # -- 事件 -------------------------------------------------------------
     def attach(self, server: Any, clients: Sequence[Any]) -> "TrainingTracker":
@@ -198,11 +204,23 @@ class TrainingTracker:
                 return
             self.cur_round = int(kwargs["cur_round"])
             self.selected_indices = list(kwargs.get("selected_client_indices", []))
+            self._t_round_begin = time.perf_counter()
 
         def _on_round_end(**kwargs):
             if kwargs.get("server", None) is not server:
                 return
+            # 本轮训练+聚合的墙钟，在评估开始之前就定下来（评估本身另计）。
+            # 用单调钟：time.time() 会被 NTP 校时拽走。
+            t0 = time.perf_counter()
+            self._t_train_s = (None if self._t_round_begin is None
+                               else t0 - self._t_round_begin)
             self._maybe_evaluate(server, clients)
+            # 评估耗时只能事后知道，而植入行是在 _evaluate_now 里写的 ——
+            # 所以回填最后一行。它存在 <=> 本轮确实评估过，正是这个数有意义的时候。
+            if (self.implantation_rows
+                    and self.implantation_rows[-1].get("round") == self.cur_round):
+                self.implantation_rows[-1]["eval_wall_s"] = round(
+                    time.perf_counter() - t0, 3)
 
         self._handlers = [("on_round_begin", _on_round_begin),
                           ("on_round_end", _on_round_end)]
@@ -673,6 +691,11 @@ class TrainingTracker:
             "acc_malicious_own": _mean("acc", malicious_rows),
             "asr_malicious_own": _mean("asr_targeted", malicious_rows),
             "n_eval_malicious": len(malicious_clients),
+            # 墙钟（Stage B 标定）。train 在本行写死，eval 由 _on_round_end 回填
+            # —— 它只有等 _evaluate_now 返回才知道。两者都不量时留 nan，不填 0。
+            "train_wall_s": (float("nan") if self._t_train_s is None
+                             else round(self._t_train_s, 3)),
+            "eval_wall_s": float("nan"),
         })
 
     # -- 产出 -------------------------------------------------------------

@@ -158,3 +158,105 @@ def test_layer_metrics_flag_does_not_change_run_tag():
     on = {j["tag"]: j["csv"]
           for j in build_commands(cfg, "all", seeds=[0], layer_metrics=True)}
     assert off == on
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Stage B 收敛标定（--stage calib）—— 导师意见 #5
+# ══════════════════════════════════════════════════════════════════════════
+
+def _calib_jobs(seeds=(0, 1)):
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    return build_commands(load_config("diag/config.yaml"), "calib", seeds=list(seeds))
+
+
+def _arg(cmd, flag):
+    return cmd[cmd.index(flag) + 1]
+
+
+def test_calib_covers_the_declared_local_steps_x_seeds():
+    from diag.config import load_config
+    calib = load_config("diag/config.yaml").exp1.calibration
+    jobs = _calib_jobs()
+    want = {(int(s), seed) for s in calib.local_steps for seed in (0, 1)}
+    got = {(int(_arg(j["cmd"], "--local-steps")), int(_arg(j["cmd"], "--seed")))
+           for j in jobs}
+    assert got == want, f"格子不齐：多 {got - want}，少 {want - got}"
+
+
+def test_local_steps_is_the_only_axis_that_varies():
+    """标定必须是单变量。剂量跟着一起变就分不清是谁让曲线提前平的。"""
+    jobs = _calib_jobs()
+    for flag in ("--bad-client-num", "--poison-rate", "--total-round",
+                 "--eval-every", "--model-size", "--client-num",
+                 "--select-per-round", "--alpha", "--pfl"):
+        vals = {_arg(j["cmd"], flag) for j in jobs}
+        assert len(vals) == 1, f"{flag} 在标定批里不恒定：{vals}"
+    assert len({_arg(j["cmd"], "--local-steps") for j in jobs}) == 3
+
+
+def test_calib_uses_the_shortened_budget_and_denser_eval():
+    """标定用缩短的预算 + 加密的评估点；不这么设就既贵又看不出拐点。"""
+    from diag.config import load_config
+    exp1 = load_config("diag/config.yaml").exp1
+    jobs = _calib_jobs()
+    for j in jobs:
+        assert _arg(j["cmd"], "--total-round") == str(int(exp1.calibration.total_round))
+        assert _arg(j["cmd"], "--eval-every") == str(int(exp1.calibration.eval_every))
+    assert int(exp1.calibration.total_round) < int(exp1.total_round)
+    assert int(exp1.calibration.eval_every) < int(exp1.eval_every)
+
+
+def test_eval_every_appears_exactly_once():
+    """`--eval-every` 被就地改写，不是再 append 一个。
+
+    argparse 取最后一个值，所以两个并存**不会报错**，但那条命令事后没法判读
+    到底跑的是哪个密度 —— 与陷阱 #7（`--config` 被静默忽略）同一类失败。
+    """
+    for j in _calib_jobs():
+        assert j["cmd"].count("--eval-every") == 1, j["cmd"]
+        assert j["cmd"].count("--local-steps") == 1, j["cmd"]
+        assert j["cmd"].count("--total-round") == 1, j["cmd"]
+
+
+def test_calib_tags_and_csvs_are_unique():
+    """local_steps 必须进 tag。CSV 路径只由 (alpha, seed, tag) 决定 ——
+    三格共用 tag = 后两格覆盖前一格，而 `--skip-existing` 还会因为
+    「文件已存在且有 asr_paper_all 列」把它们整个跳过，输出看起来一切正常。"""
+    jobs = _calib_jobs()
+    tags = [j["tag"] for j in jobs]
+    csvs = [j["csv"] for j in jobs]
+    assert len(set(tags)) == len(jobs), f"tag 撞了：{sorted(tags)}"
+    assert len(set(csvs)) == len(jobs), f"CSV 撞了：{sorted(csvs)}"
+    for j in jobs:
+        assert f"steps{_arg(j['cmd'], '--local-steps')}" in j["tag"]
+
+
+def test_calib_is_not_included_in_stage_all():
+    """标定的预算与主力不同，混进并表就是把两批不可比的数字画进一张图。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    cfg = load_config("diag/config.yaml")
+    assert not any(j["stage"] == "calib"
+                   for j in build_commands(cfg, "all", seeds=[0]))
+
+
+def test_calib_does_not_leak_into_the_main_grid():
+    """反向锚点：主力格子的 local_steps / total_round 不受标定段影响。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    cfg = load_config("diag/config.yaml")
+    for stage in ("1", "1b"):
+        for j in build_commands(cfg, stage, seeds=[0]):
+            assert _arg(j["cmd"], "--local-steps") == str(int(cfg.exp1.local_steps))
+            assert _arg(j["cmd"], "--eval-every") == str(int(cfg.exp1.eval_every))
+
+
+def test_calib_arms_do_not_share_tags_with_fedbn():
+    """两条 PFL 臂的标定产物也不能互相覆盖（与主力格子同一条约束）。"""
+    bn = {j["tag"] for j in _calib_jobs()}
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    rep = {j["tag"] for j in build_commands(load_config("diag/config.yaml"),
+                                            "calib", seeds=[0, 1], pfl="fedrep")}
+    assert bn and rep and not (bn & rep)

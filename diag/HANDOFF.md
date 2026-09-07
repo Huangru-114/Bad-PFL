@@ -213,6 +213,30 @@ eval 需要 run **根目录**的 `meta.json` / `generator.pt` / `client_<cid>.pt
 | `python -m diag.exp_t0` | **T0（Stage 0）**：全局模型的逐坐标位移剖面，纯 CPU 不排队 |
 | `python -m diag.exp_t3` | **T3**：同幅度扰动 vs 真实漂移（`--mode build` 纯 CPU，`--mode eval` 要 GPU） |
 
+## 4b. Stage B 收敛标定（导师意见 #5，**先于主力重跑**）
+
+用数据定预算，不凭感觉把 local budget 从 15 steps 改成别的。
+
+```bash
+python -m diag.run_exp1 --stage calib --seeds 0 1              # dry-run，看清单
+python -m diag.run_exp1 --stage calib --seeds 0 1 --execute    # 6 个 run
+python -m diag.read_calibration                                # 读数，不需要 GPU
+```
+
+- 唯一自变量 = `local_steps in {15, 45, 75}`（≈ 0.38 / 1.15 / 1.9 epoch），
+  剂量固定在十字扫描的交叉点 (Nm=4, ρ=0.1)。配置在 `config.yaml` 的
+  `exp1.calibration` 段：`total_round: 80`（主力 200）、`eval_every: 2`（主力 5）。
+- **`calib` 不含在 `--stage all` 里** —— 预算与主力不可比，混进并表就是把
+  两批数字画进一张图。
+- `read_calibration.py` 出「到平台的 GPU-秒」表。平台是**可计算的判据**
+  （final = 末 3 点均值，平台轮 = 最早的「此后再没离开 final ± tol」的轮次）；
+  判不出来报 `n/a`，不猜 —— 「80 轮还没平」是结论本身。
+- 数据来自本轮新加的 `train_wall_s` / `eval_wall_s` 两列（`diag/track.py`）。
+  **此前 implantation CSV 一个时间列都没有**，这个问题在 Bad-PFL 侧根本答不了。
+  旧 CSV 没有这两列 → 报 `n/a` 而不是 0。
+- 与 tf-dpfl 侧 (`experiments/calibration/`, `local_epochs in {1,3,5}`) 用**同一套
+  判据**，但 local budget 的单位不同（step vs epoch），各标各的，别直接对读。
+
 ## 5. 正式实验 1/1B（最近一次交付，代码就绪，等集群跑）
 
 - 设定：**40 客户端 / ResNet-10 / 200 轮 / 2 seed**（`config.yaml` 的 `exp1` 段）。

@@ -49,6 +49,8 @@ TEST_MODULES = [
     "diag.tests.test_analysis_exp1",
     "diag.tests.test_run_exp1",
     "diag.tests.test_backbone_alignment",
+    "diag.tests.test_wall_clock",
+    "diag.tests.test_read_calibration",
     "diag.tests.test_recompute_asr_final",
     "diag.tests.test_represent",
     "diag.tests.test_paramspace",
