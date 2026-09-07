@@ -218,10 +218,20 @@ eval 需要 run **根目录**的 `meta.json` / `generator.pt` / `client_<cid>.pt
 用数据定预算，不凭感觉把 local budget 从 15 steps 改成别的。
 
 ```bash
-python -m diag.run_exp1 --stage calib --seeds 0 1              # dry-run，看清单
-python -m diag.run_exp1 --stage calib --seeds 0 1 --execute    # 6 个 run
-python -m diag.read_calibration                                # 读数，不需要 GPU
+# 集群（Arrhenius）：整条链必须在 torch_fl.sif 容器里 —— run_exp1 --execute 用
+# subprocess 起 `python -m diag.run_fl`，子进程继承容器命名空间。
+sbatch diag/run_calib.sbatch          # 6 个 run（local_steps {15,45,75} x seed {0,1}）
+sbatch diag/run_calib.sbatch 0        # 只跑 seed 0，先探路
+
+# 登录节点看清单（dry-run，不需要 GPU，但仍要在容器里才 import 得到 diag.config）
+source diag/cluster_env.sh && $PY -m diag.run_exp1 --stage calib --seeds 0 1
+
+python3 -m diag.read_calibration      # 读数：纯 stdlib，容器内外都行
 ```
+
+> ⚠️ **Bad-PFL 的容器是 `torch_fl.sif`，入口是 `python`**；tf-dpfl 那边是
+> `tensorflow.sif` + `python3`。两个仓库不要混用。收口在 `diag/cluster_env.sh`。
+> 守卫：`diag/tests/test_cluster_scripts.py`。
 
 - 唯一自变量 = `local_steps in {15, 45, 75}`（≈ 0.38 / 1.15 / 1.9 epoch），
   剂量固定在十字扫描的交叉点 (Nm=4, ρ=0.1)。配置在 `config.yaml` 的

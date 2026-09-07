@@ -54,6 +54,7 @@ TEST_MODULES = [
     "diag.tests.test_figstyle",
     "diag.tests.test_metrics_doc",
     "diag.tests.test_viz_trigger",
+    "diag.tests.test_cluster_scripts",
     "diag.tests.test_recompute_asr_final",
     "diag.tests.test_represent",
     "diag.tests.test_paramspace",
