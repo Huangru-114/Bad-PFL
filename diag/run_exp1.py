@@ -326,19 +326,55 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
     return jobs
 
 
+def _cmd_int(cmd: Sequence[str], flag: str, default: int) -> int:
+    """从生成好的命令里读一个整数参数。"""
+    try:
+        return int(cmd[list(cmd).index(flag) + 1])
+    except (ValueError, IndexError):
+        return int(default)
+
+
 def estimate_cost(jobs: Sequence[Dict[str, Any]], cfg: Cfg) -> Dict[str, Any]:
-    """把机时说清楚 —— 这是决定要不要缩规模的唯一依据。"""
+    """把机时说清楚 —— 这是决定要不要缩规模的唯一依据。
+
+    **逐 job 从命令里读**，不从 config 读。calib / persist 这些 stage 会覆盖
+    ``--total-round`` / ``--local-steps`` / ``--eval-every``，而旧实现直接读
+    ``cfg.exp1`` 的值 → ``--stage calib`` 会打印 200 轮 × 15 steps，
+    实际跑的是 80 轮 × {15,45,75}。dry-run 打印的机时是决定要不要缩规模的
+    唯一依据，它错了整件事就白算。
+
+    每个 run 的轮数/步数不一致时（calib 正是如此），``rounds_per_run`` 等
+    单 run 字段报 **min–max 区间字符串**而不是一个数 —— 报一个数就是在
+    六个不同的 run 之间随便挑了一个。
+    """
     exp1 = cfg.exp1
-    rounds = int(exp1.total_round)
-    per_round = int(exp1.select_per_round) * int(exp1.local_steps)
-    evals = rounds // max(int(exp1.eval_every), 1)
+    sel = int(exp1.select_per_round)
+    per_job = []
+    for job in jobs:
+        cmd = job["cmd"]
+        rounds = _cmd_int(cmd, "--total-round", exp1.total_round)
+        steps = _cmd_int(cmd, "--local-steps", exp1.local_steps)
+        every = max(_cmd_int(cmd, "--eval-every", exp1.eval_every), 1)
+        per_job.append({"rounds": rounds, "steps": steps, "every": every,
+                        "batches": rounds * sel * steps,
+                        "evals": rounds // every})
+
+    def _span(key):
+        vals = sorted({j[key] for j in per_job})
+        if not vals:
+            return 0
+        return vals[0] if len(vals) == 1 else f"{vals[0]}-{vals[-1]}"
+
     return {
         "n_runs": len(jobs),
-        "rounds_per_run": rounds,
-        "local_batches_per_run": rounds * per_round,
-        "evaluations_per_run": evals,
-        "total_local_batches": len(jobs) * rounds * per_round,
-        "asr_mta_points_per_run": evals,
+        "rounds_per_run": _span("rounds"),
+        "local_steps_per_run": _span("steps"),
+        "local_batches_per_run": _span("batches"),
+        "evaluations_per_run": _span("evals"),
+        "total_local_batches": sum(j["batches"] for j in per_job),
+        # 散点图点数的**下界** —— 警告要按最差的那个 run 发，不是按平均
+        "asr_mta_points_per_run": (min(j["evals"] for j in per_job)
+                                   if per_job else 0),
     }
 
 
@@ -386,15 +422,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     cost = estimate_cost(jobs, cfg)
     print(f"=== 实验 1 / 1B：{cost['n_runs']} 个 run ===")
+    batches = cost["local_batches_per_run"]
     print(f"  每个 run {cost['rounds_per_run']} 轮 × "
-          f"{cfg.exp1.select_per_round}×{cfg.exp1.local_steps} 本地 batch "
-          f"= {cost['local_batches_per_run']:,} 个 batch")
+          f"{cfg.exp1.select_per_round}×{cost['local_steps_per_run']} 本地 batch "
+          f"= {batches:,} 个 batch" if isinstance(batches, int) else
+          f"  每个 run {cost['rounds_per_run']} 轮 × "
+          f"{cfg.exp1.select_per_round}×{cost['local_steps_per_run']} 本地 batch "
+          f"= {batches} 个 batch（各 run 不同，报区间）")
     print(f"  合计约 {cost['total_local_batches']:,} 个本地 batch")
-    print(f"  每个 run 有 {cost['asr_mta_points_per_run']} 个 (MTA, ASR) 配对 —— "
+    print(f"  每个 run 有 {cost['evaluations_per_run']} 个 (MTA, ASR) 配对 —— "
           f"ASR-vs-MTA 散点图的点数")
     if cost["asr_mta_points_per_run"] < 20:
-        print(f"  ⚠️ 每个 run 只有 {cost['asr_mta_points_per_run']} 个配对，"
-              f"散点图上看不出转折。把 exp1.eval_every 调小。")
+        print(f"  ⚠️ 最少的那个 run 只有 {cost['asr_mta_points_per_run']} 个配对，"
+              f"散点图上看不出转折。把 eval_every 调小。")
 
     # --skip-existing：把已带论文口径列的 run 标记出来，不再重训
     if args.skip_existing:

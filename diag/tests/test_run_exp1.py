@@ -260,3 +260,45 @@ def test_calib_arms_do_not_share_tags_with_fedbn():
     rep = {j["tag"] for j in build_commands(load_config("diag/config.yaml"),
                                             "calib", seeds=[0, 1], pfl="fedrep")}
     assert bn and rep and not (bn & rep)
+
+
+def test_cost_estimate_reads_the_actual_commands_not_the_config():
+    """dry-run 打印的机时是决定要不要缩规模的唯一依据，读错就整件事白算。
+
+    旧实现直接读 `cfg.exp1.total_round / local_steps / eval_every`，
+    于是 `--stage calib`（覆盖了这三个）会打印 200 轮 × 15 steps，
+    而实际跑的是 80 轮 × {15,45,75}。
+    """
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands, estimate_cost
+    cfg = load_config("diag/config.yaml")
+    jobs = build_commands(cfg, "calib", seeds=[0, 1])
+    cost = estimate_cost(jobs, cfg)
+    calib = cfg.exp1.calibration
+    assert cost["rounds_per_run"] == int(calib.total_round), \
+        f"报的是 {cost['rounds_per_run']}，实际跑 {calib.total_round}"
+    assert cost["rounds_per_run"] != int(cfg.exp1.total_round), \
+        "还在读主力的 total_round"
+    # 每个 run 有 80/2 = 40 个评估点
+    assert cost["evaluations_per_run"] == int(calib.total_round) // int(calib.eval_every)
+
+
+def test_cost_reports_a_span_when_runs_differ():
+    """六个 run 的 local_steps 不同 → 单 run 字段必须报区间，不能挑一个数。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands, estimate_cost
+    cfg = load_config("diag/config.yaml")
+    cost = estimate_cost(build_commands(cfg, "calib", seeds=[0]), cfg)
+    assert cost["local_steps_per_run"] == "15-75", cost["local_steps_per_run"]
+    assert isinstance(cost["local_batches_per_run"], str)
+
+
+def test_cost_stays_a_single_number_for_the_uniform_main_grid():
+    """反向锚点：主力格子的轮数/步数本来就一致，不该被改成区间。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands, estimate_cost
+    cfg = load_config("diag/config.yaml")
+    cost = estimate_cost(build_commands(cfg, "1", seeds=[0, 1]), cfg)
+    assert cost["rounds_per_run"] == int(cfg.exp1.total_round)
+    assert cost["local_steps_per_run"] == int(cfg.exp1.local_steps)
+    assert isinstance(cost["local_batches_per_run"], int)
