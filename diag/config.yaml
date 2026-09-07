@@ -27,7 +27,7 @@ fl:
                              # fedrep = diag 旁路实现（分类头私有、BN 聚合），
                              #   与 tf-dpfl 的 hier_fedrep 对齐，两库才能同框比较。
                              #   见 diag/pfl_fedrep.py。CLI: --pfl fedrep
-  model_size: 10             # ResNet 规模；正式实验 1 用 18
+  model_size: 10             # ResNet 规模（BasicBlock [1,1,1,1]，resnet.py:140）
 
 # ---------------------------------------------------------------------------
 # 实验 1（攻击剂量与 Bad-PFL 有效边界）与 1B（持续时间与累积效应）。
@@ -37,7 +37,11 @@ fl:
 exp1:
   client_num: 40
   select_per_round: 8
-  model_size: 18
+  model_size: 10             # 与 tf-dpfl 的 build_resnet10 同构（两边都是
+                             # BasicBlock [1,1,1,1]：resnet.py:140 vs
+                             # models/cnn.py:build_resnet10）。此前是 18，
+                             # 而报告 §2 一直写着 ResNet-10 —— 现在这句才成立，
+                             # 且两库的 Exp1/Exp3 骨干终于同框可比。
   total_round: 200
   local_steps: 15
   eval_every: 5              # ASR-vs-MTA 需要密集的 (MTA, ASR) 配对

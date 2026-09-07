@@ -3,7 +3,7 @@
 # 为什么是单轴扫描而不是全因子
 
 全因子是 ``|N_m| × |ρ_p| × |seed| = 4 × 4 × 2 = 32`` 个 run。按 40 客户端 /
-ResNet-18 / 200 轮估算，单个 run 在一张 GPU 上是小时量级 —— 32 个 run 会把
+ResNet-10 / 200 轮估算，单个 run 在一张 GPU 上是小时量级 —— 32 个 run 会把
 第一阶段拖成几天，而第一阶段要回答的只是"弱 / 过渡 / 强攻击各自在哪一段"。
 
 所以默认是**十字扫描**：固定 ``ρ_p`` 扫 ``N_m``，固定 ``N_m`` 扫 ``ρ_p``,
@@ -95,15 +95,23 @@ def _tag(prefix: str, **parts: Any) -> str:
 def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
                   instrument_root: str, results_dir: str,
                   ckpt_root: str, total_round: Optional[int] = None,
-                  pfl: str = "fedbn"
+                  pfl: str = "fedbn", layer_metrics: bool = False
                   ) -> List[str]:
     """一条 run_fl 命令。
 
     ``pfl`` 显式传下去而不是靠 config 默认值：``diag/config.yaml`` 是
     **gitignore** 的，靠它承载「这一批跑的是哪条 PFL 臂」等于没有记录。
+
+    ``layer_metrics`` 默认**关**。此前这里无条件传 ``--layer-metrics``，
+    而它逐层扫全部 key（``track._record_round`` → ``layer_signals`` +
+    ``gram_matrix``），每轮一次。产物只落进 instrumentation 的逐轮 npz
+    （``layer_update_norm`` / ``layer_cos_centroid`` / ``global_update_norm``），
+    **Exp 1 的分析一列都不读** —— ``diag/analysis_exp1.py`` 里
+    ``layer`` / ``update_norm`` / ``cos_centroid`` 零命中，它只读 implantation CSV，
+    而这些量根本不进 CSV。检测类实验（I/J）才读 npz，那时显式开。
     """
     rounds = int(cfg_exp1.total_round if total_round is None else total_round)
-    return [
+    cmd = [
         "python", "-m", "diag.run_fl",
         "--mode", "attack",
         "--alpha", str(alpha),
@@ -116,12 +124,14 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
         "--total-round", str(rounds),
         "--eval-every", str(int(cfg_exp1.eval_every)),
         "--eval-include-malicious",
-        "--layer-metrics",
         "--pfl", str(pfl),
         "--instrument-dir", instrument_root,
         "--results-dir", results_dir,
         "--ckpt-root", ckpt_root,
     ]
+    if layer_metrics:
+        cmd.append("--layer-metrics")
+    return cmd
 
 
 def implantation_csv(results_dir: str, alpha: float, seed: int, tag: str) -> str:
@@ -155,7 +165,8 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                    ckpt_root: str = "./checkpoints",
                    full_grid: bool = False,
                    seeds: Optional[Sequence[int]] = None,
-                   pfl: str = "fedbn"
+                   pfl: str = "fedbn",
+                   layer_metrics: bool = False
                    ) -> List[Dict[str, Any]]:
     """返回 ``[{"tag", "stage", "cmd"}]``。``stage`` ∈ {1, 1b, all}。
 
@@ -179,7 +190,7 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                 tag = _tag(_arm_prefix("e1", pfl), bad=point["bad_num"],
                            rho=point["poison_rate"], s=seed)
                 cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                    results_dir, ckpt_root, pfl=pfl)
+                                    results_dir, ckpt_root, pfl=pfl, layer_metrics=layer_metrics)
                 cmd += ["--bad-client-num", str(point["bad_num"]),
                         "--poison-rate", str(point["poison_rate"]),
                         "--run-tag", tag]
@@ -199,7 +210,7 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
             for seed in seeds:
                 tag = _tag(_arm_prefix("e1b", pfl), sched=kind, s=seed)
                 cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                    results_dir, ckpt_root, pfl=pfl)
+                                    results_dir, ckpt_root, pfl=pfl, layer_metrics=layer_metrics)
                 cmd += ["--bad-client-num", str(bad),
                         "--poison-rate", str(rate),
                         "--attack-schedule", kind,
@@ -231,7 +242,8 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
             # 冻结触发器 ASR（asr_paper_frozen_*）。一个 run 同时给出 A 和 B。
             tag = _tag(_arm_prefix("e1b_persist", pfl), s=seed)
             cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                results_dir, ckpt_root, pfl=pfl, total_round=total)
+                                results_dir, ckpt_root, pfl=pfl,
+                                total_round=total, layer_metrics=layer_metrics)
             cmd += ["--bad-client-num", str(bad),
                     "--poison-rate", str(rate),
                     "--attack-schedule", "burst",
@@ -248,7 +260,8 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
             # a_start 起一直在线更新 —— 与 A 只在衰减段不同。
             tag_c = _tag(_arm_prefix("e1b_persist_online", pfl), s=seed)
             cmd_c = _base_command(exp1, seed, alpha, instrument_root,
-                                  results_dir, ckpt_root, pfl=pfl, total_round=total)
+                                  results_dir, ckpt_root, pfl=pfl,
+                                total_round=total, layer_metrics=layer_metrics)
             cmd_c += ["--bad-client-num", str(bad),
                       "--poison-rate", str(rate),
                       "--attack-schedule", "burst",
@@ -295,6 +308,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--full-grid", action="store_true",
                         help="全因子而不是十字扫描。第一阶段不要用 —— "
                              "4×4×2=32 个 run")
+    parser.add_argument("--layer-metrics", action="store_true",
+                        help="逐层更新范数 / 逐层余弦 / global_update_norm。"
+                             "默认**关**：它每轮扫一遍全部 key，产物只进 "
+                             "instrumentation 的逐轮 npz，而 Exp 1 的分析"
+                             "（diag/analysis_exp1.py）只读 implantation CSV、"
+                             "一列都不碰它。检测类实验（I/J）读 npz，那时才开。")
     parser.add_argument("--instrument-root", default="instrumentation")
     parser.add_argument("--results-dir", default="results/raw")
     parser.add_argument("--ckpt-root", default="./checkpoints")
@@ -311,7 +330,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                           results_dir=args.results_dir,
                           ckpt_root=args.ckpt_root,
                           full_grid=args.full_grid, seeds=args.seeds,
-                          pfl=args.pfl)
+                          pfl=args.pfl, layer_metrics=args.layer_metrics)
 
     cost = estimate_cost(jobs, cfg)
     print(f"=== 实验 1 / 1B：{cost['n_runs']} 个 run ===")

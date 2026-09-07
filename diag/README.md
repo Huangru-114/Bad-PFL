@@ -410,9 +410,15 @@ python -m diag.analysis_exp1 \
     --out-dir results/figs --summary-prefix results/exp1
 ```
 
-⚠️ **换设定，不是延续**：`exp1` 用 40 客户端 / ResNet-18 / 200 轮，而实验 A–J
+⚠️ **换设定，不是延续**：`exp1` 用 40 客户端 / ResNet-10 / 200 轮，而实验 A–J
 是 100 客户端 / ResNet-10 / 1000 轮。**此前所有 I/J 的数字都不再可比**，
 不要把两批结果画在同一张图上。
+
+⚠️ **exp1 的骨干 2026-09-07 从 ResNet-18 改成 ResNet-10**（`exp1.model_size`），
+对齐 tf-dpfl 的 `build_resnet10`（两边都是 BasicBlock [1,1,1,1]）。
+**改动之前跑出来的 exp1/1B/B2 结果与之后的不可比**；旧的 checkpoint 也是
+ResNet-18，用 `exp_t3` 之类的离线工具去读它们时 `--model-size` 必须给 18，
+否则 `load_state_dict` 会在形状上炸（见 PATCHES.md 的同类记录）。
 
 ⚠️ **exp1 的 ASR 口径**（埋点 12/14）：`analysis_exp1` 单列图**默认读
 `asr_paper_benign`**——只对良性客户端（受害者）求均值，是"后门是否传到受害者"的
@@ -561,7 +567,9 @@ python -m diag.exp_t3 --mode eval \
 # 被抢占后原样重跑并加 --resume，已算过的格子会跳过
 ```
 
-`--model-size 18`（B2 是 ResNet-18，对应 `config.yaml` 的 `exp1.model_size`）、
+`--model-size`（**必须与 checkpoint 的骨干一致**：2026-09-07 之前跑的 B2
+checkpoint 是 ResNet-18 → 给 18，如上面的命令；之后重跑的是 ResNet-10 → 给 10。
+`config.yaml` 的 `exp1.model_size` 说的是**新** run 用哪个，不是旧 checkpoint 是哪个）、
 `--data-root`（CIFAR-10 测试集，`download=False`）、`--device`（`0` 表示 `cuda:0`，
 `cpu` 表示 CPU）这三个**必须按你的环境给全**，缺省值不一定对。
 

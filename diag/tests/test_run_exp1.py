@@ -100,3 +100,61 @@ def test_unknown_pfl_arm_is_rejected_early():
     except ValueError:
         return
     raise AssertionError("未知的 pfl 臂名没有被拒绝")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# --layer-metrics：默认关（标定跑不需要它，而它每轮扫全部 key）
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_layer_metrics_is_off_by_default():
+    """此前这里**无条件**传 ``--layer-metrics``，于是 Exp 1 的每个 run 都在付
+    逐层扫描的钱，而 Exp 1 的分析一列都不读（见下一条测试给的证据）。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    cfg = load_config("diag/config.yaml")
+    for stage in ("1", "1b", "all"):
+        for job in build_commands(cfg, stage, seeds=[0]):
+            assert "--layer-metrics" not in job["cmd"], (
+                f"{stage}/{job['tag']}：默认不该开 --layer-metrics")
+
+
+def test_layer_metrics_can_still_be_turned_on():
+    """检测类实验（I/J）读 instrumentation 的逐轮 npz，需要它 —— 是开关不是删除。"""
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    cfg = load_config("diag/config.yaml")
+    for stage in ("1", "1b", "all"):
+        for job in build_commands(cfg, stage, seeds=[0], layer_metrics=True):
+            assert "--layer-metrics" in job["cmd"], \
+                f"{stage}/{job['tag']}：显式打开时必须传下去"
+
+
+def test_exp1_analysis_reads_no_layer_column():
+    """关掉它不丢 Exp 1 需要的任何一列 —— 这是「默认关」的依据，不是感觉。
+
+    ``analysis_exp1.py`` 只读 implantation CSV，而逐层量根本不进 CSV
+    （它们进 ``instrumentation/<run>/round_XXXX.npz``，见 RoundRecorder.write）。
+    这条测试直接扫源码，新增图表若开始读逐层列会立刻变红，提醒改默认值。
+    """
+    from pathlib import Path
+    src = Path("diag/analysis_exp1.py").read_text(encoding="utf-8")
+    for column in ("layer_update_norm", "layer_cos_centroid",
+                   "layer_global_update_norm", "global_update_norm"):
+        assert column not in src, (
+            f"analysis_exp1.py 现在读 {column} 了 —— "
+            "那 --layer-metrics 就不能默认关，请同步改 _base_command")
+
+
+def test_layer_metrics_flag_does_not_change_run_tag():
+    """开关不进 tag：同一格开与不开产物同名，避免把「同一个格子」拆成两份。
+
+    （与 ``--pfl`` 相反 —— pfl 改变的是**跑什么**，必须分家；layer-metrics
+    只改**记什么**，CSV 逐列相同。）
+    """
+    from diag.config import load_config
+    from diag.run_exp1 import build_commands
+    cfg = load_config("diag/config.yaml")
+    off = {j["tag"]: j["csv"] for j in build_commands(cfg, "all", seeds=[0])}
+    on = {j["tag"]: j["csv"]
+          for j in build_commands(cfg, "all", seeds=[0], layer_metrics=True)}
+    assert off == on

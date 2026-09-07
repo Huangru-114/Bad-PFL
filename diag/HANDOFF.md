@@ -215,9 +215,12 @@ eval 需要 run **根目录**的 `meta.json` / `generator.pt` / `client_<cid>.pt
 
 ## 5. 正式实验 1/1B（最近一次交付，代码就绪，等集群跑）
 
-- 设定：**40 客户端 / ResNet-18 / 200 轮 / 2 seed**（`config.yaml` 的 `exp1` 段）。
-  **⚠️ 换设定不是延续**：实验 A–J 是 100 客户端 / ResNet-10 / 1000 轮，
-  两批数字**不可比**，别画一张图。
+- 设定：**40 客户端 / ResNet-10 / 200 轮 / 2 seed**（`config.yaml` 的 `exp1` 段）。
+  **⚠️ 骨干已从 ResNet-18 换成 ResNet-10**（2026-09-07）：与 tf-dpfl 的
+  `build_resnet10` 同构（两边都是 BasicBlock [1,1,1,1]），两库的 Exp1/Exp3 才能
+  同框比较；报告 §2 一直写着 "ResNet-10"，现在这句才成立。
+  **换骨干前跑出来的 exp1 结果与之后的不可比**，别混进一张图。
+  **⚠️ 换设定不是延续**：实验 A–J 是 100 客户端 / 1000 轮，与 exp1 同样不可比。
 - 逐轮记录已扩展：主任务（clean_loss/mta/target-class acc，个性化+全局）、
   后门（逐 edge ASR 存 `exp_ij_edge_*.csv`）、参数（layer norm/cos、分组 cos）、
   表征（离线）。**`mta` ≠ `acc`**：mta 是全部样本，acc 是非目标类样本（ASR 分母口径）。
