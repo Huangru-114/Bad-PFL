@@ -23,7 +23,10 @@ fl:
   learning_rate: 0.1
   total_round: 1000
   poison_rate: 0.2
-  pfl: fedbn                 # 本仓库唯一实现的 PFL 方法
+  pfl: fedbn                 # fedbn = 上游 pfl.py 唯一实现（BN 私有、分类头共享）
+                             # fedrep = diag 旁路实现（分类头私有、BN 聚合），
+                             #   与 tf-dpfl 的 hier_fedrep 对齐，两库才能同框比较。
+                             #   见 diag/pfl_fedrep.py。CLI: --pfl fedrep
   model_size: 10             # ResNet 规模；正式实验 1 用 18
 
 # ---------------------------------------------------------------------------

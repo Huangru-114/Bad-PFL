@@ -8,6 +8,10 @@
 
     python -m diag.tests.run_tests            # 跑全部
     python -m diag.tests.run_tests features   # 只跑名字含 'features' 的模块
+
+跳过约定：用例里 ``raise unittest.SkipTest("原因")``。运行器会**单独计数并
+在末尾逐条列出**，绝不与 PASS 混在一起 —— 需要 torch/GPU 的用例在缺依赖的机器上
+若被记成 PASS，就是假绿。
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import importlib
 import sys
 import time
 import traceback
+import unittest
 from pathlib import Path
 from typing import List
 
@@ -48,6 +53,7 @@ TEST_MODULES = [
     "diag.tests.test_paramspace",
     "diag.tests.test_exp_t0",
     "diag.tests.test_exp_t3",
+    "diag.tests.test_pfl_fedrep",
 ]
 
 
@@ -69,7 +75,7 @@ def _assert_registry_is_complete() -> None:
 
 def run(selector: str = "") -> int:
     _assert_registry_is_complete()
-    passed, failed = 0, []
+    passed, failed, skipped = 0, [], []
     started = time.time()
 
     for module_name in TEST_MODULES:
@@ -87,12 +93,26 @@ def run(selector: str = "") -> int:
                 func()
                 passed += 1
                 print(f"  PASS  {short}::{attr}")
+            except unittest.SkipTest as exc:
+                # **必须与 PASS 区分开**。曾经的写法是让跳过的用例直接 return，
+                # 于是它们和真跑过的一起记 PASS —— 那是假绿，比没有测试更糟
+                # （本仓库对「漏登记的测试文件」也是同样的态度，见
+                #  _assert_registry_is_complete）。
+                skipped.append((short, attr, str(exc)))
+                print(f"  SKIP  {short}::{attr}  ({exc})")
             except Exception:
                 failed.append((short, attr, traceback.format_exc()))
                 print(f"  FAIL  {short}::{attr}")
 
     elapsed = time.time() - started
-    print(f"\n{passed} passed, {len(failed)} failed in {elapsed:.2f}s")
+    summary = f"{passed} passed, {len(failed)} failed"
+    if skipped:
+        summary += f", {len(skipped)} skipped"
+    print(f"\n{summary} in {elapsed:.2f}s")
+    if skipped:
+        print("\n跳过的用例（**没有被验证过**，不要当成通过）：")
+        for short, attr, why in skipped:
+            print(f"  - {short}::{attr}  —— {why}")
     for short, attr, trace in failed:
         print(f"\n{'=' * 70}\nFAILED {short}::{attr}\n{'-' * 70}\n{trace}")
     return 0 if not failed else 1

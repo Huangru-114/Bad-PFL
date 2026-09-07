@@ -62,6 +62,7 @@ from event_emitter import fl_event_emitter
 from fba import use_our_attack
 from fl_process import basic_fl_process
 from pfl import use_fedbn
+from diag.pfl_fedrep import use_fedrep, make_fedrep_class, default_head_steps
 
 from .schedule import SCHEDULES, AttackSchedule, gate_attack
 from resnet import get_resnet
@@ -184,7 +185,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            layer_metrics: bool = False,
            schedule: Optional["AttackSchedule"] = None,
            generator_online_from: Optional[int] = None,
-           freeze_trigger_eval: bool = False) -> Path:
+           freeze_trigger_eval: bool = False,
+           pfl: Optional[str] = None,
+           fedrep_head_steps: Optional[int] = None) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -312,6 +315,22 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     def model_factory():
         return get_resnet(size=model_size, num_classes=num_classes)
 
+    # --- PFL 方法：fedbn（上游唯一实现）或 fedrep（diag 旁路实现）--------
+    pfl_method = str(pfl if pfl is not None else cfg.fl.pfl).lower()
+    if pfl_method not in ("fedbn", "fedrep", "none"):
+        raise ValueError(f"未知的 pfl={pfl_method!r}；可选 fedbn / fedrep / none")
+    use_fedrep_arm = (pfl_method == "fedrep")
+    head_steps = (default_head_steps(local_steps) if fedrep_head_steps is None
+                  else int(fedrep_head_steps))
+    if use_fedrep_arm:
+        print(f"[PFL] fedrep | 私有=分类头 linear.* | BN 参与聚合 | "
+              f"本地 {head_steps} 步训头 + {local_steps - head_steps} 步训 backbone")
+    else:
+        print(f"[PFL] {pfl_method} | 私有=BN(γ/β+running stats) | 分类头共享")
+
+    BenignCls = make_fedrep_class(BasicClient) if use_fedrep_arm else BasicClient
+    MaliciousCls = make_fedrep_class(PoisonClient) if use_fedrep_arm else PoisonClient
+
     clients: List[Any] = []
     n_benign = client_num - bad_client_num
     for i in range(client_num):
@@ -319,18 +338,21 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         is_slot_malicious = i >= n_benign
         # clean run 里恶意槽位的客户端也是普通 BasicClient —— 这正是唯一的变量。
         if is_slot_malicious and mode == "attack":
-            client = PoisonClient(model, train_loaders[i], test_loaders[i],
+            client = MaliciousCls(model, train_loaders[i], test_loaders[i],
                                   loss_func, optimizer_factory, poison_func=None)
             client.diag_is_malicious = True
             client.diag_poison_ratio = poison_rate
         else:
-            client = BasicClient(model, train_loaders[i], test_loaders[i],
-                                 loss_func, optimizer_factory)
+            client = BenignCls(model, train_loaders[i], test_loaders[i],
+                               loss_func, optimizer_factory)
             client.diag_is_malicious = False
             client.diag_poison_ratio = 0.0
         client.partition_idx = i
         client.diag_is_malicious_slot = bool(is_slot_malicious)
         client.diag_n_participations = 0
+        if use_fedrep_arm:
+            # 相位切分要在构造之后注入 —— 上游 BasicClient 的构造签名不能碰（铁律 #1）
+            client.configure_fedrep(local_steps=local_steps, head_steps=head_steps)
         clients.append(client)
 
     random.shuffle(clients)   # 与 main.py:95 一致，但现在是可复现的
@@ -343,7 +365,9 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     server = BasicServer(global_model)
     server.global_model.device = torch_device
     server.agg_rule = "avg"
-    if str(cfg.fl.pfl) == "fedbn":
+    if use_fedrep_arm:
+        use_fedrep(server)
+    elif pfl_method == "fedbn":
         use_fedbn(server)
 
     # --- 5. 攻击配置（唯一的模式差异） ------------------------------------
@@ -568,6 +592,12 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         "client_num": client_num, "bad_client_num": bad_client_num,
         "select_per_round": select_per_round, "local_steps": local_steps,
         "total_round": total_round, "batch_size": batch_size,
+        # PFL 臂必须自描述：fedbn 与 fedrep 的「个性化模型」语义完全不同
+        # （前者 BN 私有/分类头共享，后者反过来），两条臂的 acc_global 与
+        # asr_paper_* 都不可同框。不写明跑的是哪条，事后无法判读。
+        "pfl": pfl_method,
+        "fedrep_head_steps": (head_steps if use_fedrep_arm else None),
+        "fedrep_body_steps": (local_steps - head_steps if use_fedrep_arm else None),
         "poison_rate": poison_rate if mode == "attack" else 0.0,
         "seeds": seed_info,
         "select_rule_seed": seed + int(cfg.determinism.select_rule_seed_offset),
@@ -693,6 +723,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model-size", type=int, default=None,
                         choices=[10, 18, 34, 50, 101, 152],
                         help="ResNet 规模，默认取 config 的 fl.model_size")
+    parser.add_argument("--pfl", default=None, choices=["fedbn", "fedrep", "none"],
+                        help="PFL 方法。fedbn=上游唯一实现（BN 私有、分类头共享）；"
+                             "fedrep=diag 旁路实现（分类头私有、BN 聚合，与 tf-dpfl "
+                             "的 hier_fedrep 对齐）。默认取 config 的 fl.pfl")
+    parser.add_argument("--fedrep-head-steps", type=int, default=None,
+                        help="FedRep 头阶段的步数，其余步训 backbone。"
+                             "默认 local_steps//2（tf-dpfl 侧是 1:1）")
     parser.add_argument("--layer-metrics", action="store_true",
                         help="逐层更新范数与逐层余弦。要多扫一遍全部 key，"
                              "ResNet-18 上明显变慢，默认关闭")
@@ -738,7 +775,8 @@ def main(argv: Optional[List[str]] = None) -> int:
            model_size=args.model_size, layer_metrics=args.layer_metrics,
            schedule=schedule,
            generator_online_from=args.generator_online_from,
-           freeze_trigger_eval=args.freeze_trigger_eval)
+           freeze_trigger_eval=args.freeze_trigger_eval,
+           pfl=args.pfl, fedrep_head_steps=args.fedrep_head_steps)
     return 0
 
 
