@@ -70,6 +70,20 @@ def dose_points(bad_nums: Sequence[int], poison_rates: Sequence[float],
     return points
 
 
+def _arm_prefix(prefix: str, pfl: str) -> str:
+    """把 PFL 臂编进 run tag。
+
+    **不编进去会静默覆盖数据**：`implantation_csv()` 的路径是
+    ``exp_ij_implantation_fedavg_attack_a{alpha}_s{seed}_{tag}.csv``，
+    只由 (alpha, seed, tag) 决定。同一个剂量格在 fedbn 与 fedrep 两条臂下
+    tag 相同 → 第二条臂把第一条的 CSV 覆盖掉，而且 `--skip-existing`
+    还会因为「文件已存在且有 asr_paper_all 列」直接跳过不跑。
+
+    fedbn 保持原样（不加后缀），这样此前跑出来的文件名不变、仍可续跑。
+    """
+    return prefix if str(pfl) == "fedbn" else f"{prefix}_{pfl}"
+
+
 def _tag(prefix: str, **parts: Any) -> str:
     pieces = [prefix]
     for name, value in parts.items():
@@ -80,8 +94,14 @@ def _tag(prefix: str, **parts: Any) -> str:
 
 def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
                   instrument_root: str, results_dir: str,
-                  ckpt_root: str, total_round: Optional[int] = None
+                  ckpt_root: str, total_round: Optional[int] = None,
+                  pfl: str = "fedbn"
                   ) -> List[str]:
+    """一条 run_fl 命令。
+
+    ``pfl`` 显式传下去而不是靠 config 默认值：``diag/config.yaml`` 是
+    **gitignore** 的，靠它承载「这一批跑的是哪条 PFL 臂」等于没有记录。
+    """
     rounds = int(cfg_exp1.total_round if total_round is None else total_round)
     return [
         "python", "-m", "diag.run_fl",
@@ -97,6 +117,7 @@ def _base_command(cfg_exp1: Cfg, seed: int, alpha: float,
         "--eval-every", str(int(cfg_exp1.eval_every)),
         "--eval-include-malicious",
         "--layer-metrics",
+        "--pfl", str(pfl),
         "--instrument-dir", instrument_root,
         "--results-dir", results_dir,
         "--ckpt-root", ckpt_root,
@@ -133,9 +154,17 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                    results_dir: str = "results/raw",
                    ckpt_root: str = "./checkpoints",
                    full_grid: bool = False,
-                   seeds: Optional[Sequence[int]] = None
+                   seeds: Optional[Sequence[int]] = None,
+                   pfl: str = "fedbn"
                    ) -> List[Dict[str, Any]]:
-    """返回 ``[{"tag", "stage", "cmd"}]``。``stage`` ∈ {1, 1b, all}。"""
+    """返回 ``[{"tag", "stage", "cmd"}]``。``stage`` ∈ {1, 1b, all}。
+
+    ``pfl`` ∈ {fedbn, fedrep}。它既进命令行（``--pfl``）**也进 run tag** ——
+    两条臂的 CSV 路径只由 (alpha, seed, tag) 决定，不区分就会互相覆盖，
+    而 ``--skip-existing`` 还会把第二条臂整个跳过。见 ``_arm_prefix``。
+    """
+    if pfl not in ("fedbn", "fedrep"):
+        raise ValueError(f"未知的 pfl={pfl!r}；可选 fedbn / fedrep")
     exp1 = cfg.exp1
     alpha = float(exp1.alpha)
     seeds = [int(s) for s in (seeds if seeds is not None else exp1.seeds)]
@@ -147,10 +176,10 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                              float(exp1.poison_rate_fixed), full_grid)
         for point in points:
             for seed in seeds:
-                tag = _tag("e1", bad=point["bad_num"],
+                tag = _tag(_arm_prefix("e1", pfl), bad=point["bad_num"],
                            rho=point["poison_rate"], s=seed)
                 cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                    results_dir, ckpt_root)
+                                    results_dir, ckpt_root, pfl=pfl)
                 cmd += ["--bad-client-num", str(point["bad_num"]),
                         "--poison-rate", str(point["poison_rate"]),
                         "--run-tag", tag]
@@ -168,9 +197,9 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
             # 先构造一次，参数不合法就地报错，而不是等集群上跑到才发现
             schedule = AttackSchedule(kind=kind, **spec)
             for seed in seeds:
-                tag = _tag("e1b", sched=kind, s=seed)
+                tag = _tag(_arm_prefix("e1b", pfl), sched=kind, s=seed)
                 cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                    results_dir, ckpt_root)
+                                    results_dir, ckpt_root, pfl=pfl)
                 cmd += ["--bad-client-num", str(bad),
                         "--poison-rate", str(rate),
                         "--attack-schedule", kind,
@@ -200,9 +229,9 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
         for seed in seeds:
             # A/B 线：δ 停攻即冻结（默认门控），并开 --freeze-trigger-eval 另存
             # 冻结触发器 ASR（asr_paper_frozen_*）。一个 run 同时给出 A 和 B。
-            tag = _tag("e1b_persist", s=seed)
+            tag = _tag(_arm_prefix("e1b_persist", pfl), s=seed)
             cmd = _base_command(exp1, seed, alpha, instrument_root,
-                                results_dir, ckpt_root, total_round=total)
+                                results_dir, ckpt_root, pfl=pfl, total_round=total)
             cmd += ["--bad-client-num", str(bad),
                     "--poison-rate", str(rate),
                     "--attack-schedule", "burst",
@@ -217,9 +246,9 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
 
             # C 线（上界对照）：投毒仍只在 [a_start, a_start+a_len)，但生成器从
             # a_start 起一直在线更新 —— 与 A 只在衰减段不同。
-            tag_c = _tag("e1b_persist_online", s=seed)
+            tag_c = _tag(_arm_prefix("e1b_persist_online", pfl), s=seed)
             cmd_c = _base_command(exp1, seed, alpha, instrument_root,
-                                  results_dir, ckpt_root, total_round=total)
+                                  results_dir, ckpt_root, pfl=pfl, total_round=total)
             cmd_c += ["--bad-client-num", str(bad),
                       "--poison-rate", str(rate),
                       "--attack-schedule", "burst",
@@ -255,6 +284,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="实验 1 / 1B 的命令生成器（默认 dry-run）")
     parser.add_argument("--config", default=None)
+    parser.add_argument("--pfl", default="fedbn", choices=["fedbn", "fedrep"],
+                        help="PFL 臂。fedbn=上游实现（BN 私有、分类头共享）；"
+                             "fedrep=diag 旁路实现（分类头私有、BN 聚合，与 tf-dpfl "
+                             "的 hier_fedrep 对齐）。**它会进 run tag**，两条臂的"
+                             "产物互不覆盖；fedbn 保持原命名以便续跑。")
     parser.add_argument("--stage", default="all",
                         choices=["1", "1b", "persist", "all"])
     parser.add_argument("--seeds", type=int, nargs="*", default=None)
@@ -276,7 +310,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           instrument_root=args.instrument_root,
                           results_dir=args.results_dir,
                           ckpt_root=args.ckpt_root,
-                          full_grid=args.full_grid, seeds=args.seeds)
+                          full_grid=args.full_grid, seeds=args.seeds,
+                          pfl=args.pfl)
 
     cost = estimate_cost(jobs, cfg)
     print(f"=== 实验 1 / 1B：{cost['n_runs']} 个 run ===")
