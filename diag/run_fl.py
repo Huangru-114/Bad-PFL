@@ -325,6 +325,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     if use_fedrep_arm:
         print(f"[PFL] fedrep | 私有=分类头 linear.* | BN 参与聚合 | "
               f"本地 {head_steps} 步训头 + {local_steps - head_steps} 步训 backbone")
+        if head_steps == 0:
+            # smoke 配置的 local_steps=1 会走到这里。此时 default_head_steps 返回 0
+            # （只有一步就全给 backbone，否则表示永不更新）——**两阶段训练根本没被执行**。
+            # 不喊出来的话，一次「--smoke --pfl fedrep 跑通了」会被当成两阶段已验证。
+            print("[PFL] ⚠️ head_steps=0：本地只有 1 步，全部给了 backbone，"
+                  "**头阶段没有运行** —— 这一跑没有测到两阶段训练。"
+                  "要验证两阶段请显式加 --local-steps 4 及以上"
+                  "（或 --fedrep-head-steps）。")
     else:
         print(f"[PFL] {pfl_method} | 私有=BN(γ/β+running stats) | 分类头共享")
 
