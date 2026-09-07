@@ -927,8 +927,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--level", type=float, default=0.5,
                         help="判定'后门已植入'的 ASR 水平")
     parser.add_argument("--tail", type=int, default=3)
-    parser.add_argument("--asr-column", default="asr_paper_benign",
-                        help="单列图用哪一列当 ASR。默认 asr_paper_benign —— "
+    parser.add_argument("--asr-column", default="asr_paper_filtered_benign",
+                        help="单列图用哪一列当 ASR。默认 "
+                             "asr_paper_filtered_benign —— "
                              "受害者作用域（只对良性客户端求均值，排除攻击者自身 "
                              "≈1.0），是'后门是否传到受害者'的诚实口径。可选 "
                              "asr_paper_all（含攻击者，会随 N_m 机械抬高，对齐 "
@@ -942,7 +943,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "一致。CIFAR-10 下两者差约 10 个百分点。**跨库比较或"
                              "对外报数一律用 filtered**。旧 run 没有 filtered 列，"
                              "会自动回退并打印提示；只想要最终轮的精确 filtered "
-                             "也可以用 diag.recompute_asr_final。")
+                             "也可以用 diag.recompute_asr_final。\n"
+                             "**默认值 2026-09 从 asr_paper_benign 改成了 "
+                             "filtered 版**：报告 §2 与 diag/METRICS.md 写的口径"
+                             "一直是 filtered，而图画的是 unfiltered，两者差约 "
+                             "10 个百分点 —— 这是把默认值对齐到已写明的约定，"
+                             "不是换口径。想复现旧图显式传 --asr-column "
+                             "asr_paper_benign。")
     args = parser.parse_args(argv)
 
     # 出版级 rcParams（字号/网格/spines/savefig dpi）。放在任何一张图之前。
@@ -958,7 +965,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ASR_COLUMN, asr_note = resolve_asr_column(frame, str(args.asr_column))
     if asr_note:
         print(f"  {asr_note}")
-    print(f"[analysis_exp1] ASR 口径 = {ASR_COLUMN}")
+    convention = ("filtered（分母排除目标类）"
+                  if "filtered" in ASR_COLUMN else
+                  "UNFILTERED（分母含目标类）")
+    print(f"[analysis_exp1] ASR 口径 = {ASR_COLUMN}  ->  {convention}")
+    if "filtered" not in ASR_COLUMN:
+        print("  ⚠️ 这批图是 unfiltered 的，而报告 §2 / diag/METRICS.md 写的是 "
+              "filtered（差约 10 个百分点）。对外报数前确认这是有意为之。")
 
     # 持续性长跑（run_id 带 "persist"）是独立实验（400 轮），不能混进 stage-1
     # 与 1B-timing 的分析，否则它那条 400 轮的 burst 会污染阈值/剂量/调度图。

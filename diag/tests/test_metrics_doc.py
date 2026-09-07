@@ -143,3 +143,26 @@ def test_doc_carries_a_ready_to_paste_english_section():
     english = DOC_TEXT[DOC_TEXT.index("Threat model."):]
     cjk = [ch for ch in english if "一" <= ch <= "鿿"]
     assert not cjk, f"英文段里混进了中文：{''.join(cjk[:20])}"
+
+
+def test_analysis_default_asr_column_matches_the_documented_convention():
+    """图默认画的口径必须与文档写的口径一致。
+
+    这一条此前**不成立**：`diag/METRICS.md` 与报告 §2 都写 filtered，
+    而 `analysis_exp1` 的 `--asr-column` 默认是 `asr_paper_benign`（unfiltered），
+    两者差约 10 个百分点。文档说一套、图画另一套是最难发现的一类错误 ——
+    图上没有任何地方会暴露它。
+    """
+    src = (ROOT / "diag" / "analysis_exp1.py").read_text(encoding="utf-8")
+    m = re.search(r'"--asr-column",\s*default="([^"]+)"', src)
+    assert m, "找不到 --asr-column 的默认值"
+    assert m.group(1).startswith("asr_paper_filtered"), (
+        f"默认口径是 {m.group(1)}（unfiltered），而文档写的是 filtered")
+    assert "报告正文一律用" in DOC_TEXT
+
+
+def test_analysis_announces_which_convention_it_used():
+    """终端要打出口径，unfiltered 时要给警告 —— 事后判读一批图靠的就是这行。"""
+    src = (ROOT / "diag" / "analysis_exp1.py").read_text(encoding="utf-8")
+    assert "ASR 口径 =" in src
+    assert 'if "filtered" not in ASR_COLUMN:' in src, "unfiltered 时没有警告"
