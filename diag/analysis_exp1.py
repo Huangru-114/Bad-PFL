@@ -45,6 +45,9 @@ import numpy as np
 import pandas as pd
 
 from .analysis import assert_no_cjk_in_figure
+from .figstyle import (apply_publication_style, asr_axis_label,
+                       facet_layout, fig_axis_labels, finish_facets,
+                       outside_legend, pretty_label)
 
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
@@ -396,7 +399,10 @@ def dose_response_tiers(frame: pd.DataFrame,
     ``tier`` 用短名 benign/all/malicious。
     """
     short = {"asr_paper_benign": "benign", "asr_paper_all": "all",
-             "asr_paper_malicious": "malicious"}
+             "asr_paper_malicious": "malicious",
+             "asr_paper_filtered_benign": "benign",
+             "asr_paper_filtered_all": "all",
+             "asr_paper_filtered_malicious": "malicious"}
     present = [c for c in cols
                if c in frame.columns and bool(np.isfinite(frame[c]).any())]
     rows: List[Dict[str, Any]] = []
@@ -413,6 +419,9 @@ def dose_response_tiers(frame: pd.DataFrame,
                 "bad_client_num": int(keys[0]),
                 "poison_rate": float(keys[1]), "seed": int(keys[2]),
                 "tier": short.get(col, col), "asr": value,
+                # 记下实际用了哪一列 —— 图注要据此说明是不是排除了目标类，
+                # 而不是像旧版那样把 "unfiltered" 写死在文案里。
+                "source_column": col,
             })
     return pd.DataFrame(rows)
 
@@ -421,11 +430,12 @@ def dose_response_tiers(frame: pd.DataFrame,
 # 图
 # ---------------------------------------------------------------------------
 def _finish(fig, out_path, note: str = "") -> Path:
+    # tight_layout 只认 axes 与 sup*label；画布外的 legend / 图注由
+    # savefig(bbox_inches="tight") 收进来（见 figstyle.outside_legend）。
+    fig.tight_layout()
     if note:
-        fig.tight_layout()
-        fig.text(0.5, -0.01, note, ha="center", va="top", fontsize=7.5)
-    else:
-        fig.tight_layout()
+        fig.text(0.5, -0.01, note, ha="center", va="top", fontsize=7.5,
+                 wrap=True)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     assert_no_cjk_in_figure(fig)
@@ -459,14 +469,23 @@ def _seed_mean_curve(group: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_index()
 
 
+# 图注/正文里用的纯 ASCII 短名（figstyle 的 short 名是 mathtext，适合轴与
+# legend；图注是一整段句子，混进 $...$ 反而难读）。
 _VAR_SHORT = {"bad_client_num": "Nm", "poison_rate": "rho"}
 
 
 def _fmt_level(var: str, value: Any) -> str:
-    """把一个变量的取值格式化成 legend/标题用的短标签。"""
-    short = _VAR_SHORT.get(var, var)
-    return (f"{short}={int(value)}" if var == "bad_client_num"
-            else f"{short}={float(value):g}")
+    """legend / 分面标题用的短标签。
+
+    与 ``figstyle.pretty_label(short=True)`` 同一套记号（mathtext），
+    否则会出现 legend 标题写 "$N_m$"、条目却写 "Nm=4" 的不一致。
+    """
+    short = pretty_label(var, short=True)
+    if var == "bad_client_num":
+        return f"{short} = {int(value)}"
+    if var == "poison_rate":
+        return f"{short} = {float(value):g}"
+    return f"{short} = {value}"
 
 
 def _level_colors(values: Sequence[Any]) -> Dict[Any, Any]:
@@ -476,29 +495,24 @@ def _level_colors(values: Sequence[Any]) -> Dict[Any, Any]:
     return {key: palette(i % palette.N) for i, key in enumerate(keys)}
 
 
-def _facet_layout(n: int) -> Tuple[int, int]:
-    ncol = min(3, max(1, n))
-    nrow = (n + ncol - 1) // ncol
-    return nrow, ncol
-
-
-def _fig_axis_labels(fig, xlabel: str, ylabel: str) -> None:
-    """给整张分面图加公共 x/y 轴标签。
-
-    用 ``fig.text`` 而非 ``fig.supxlabel/supylabel`` —— 后者要 matplotlib>=3.4，
-    集群版本未知，为免在出图阶段直接崩掉，退回到到处都有的 ``fig.text``。
-    """
-    fig.text(0.5, 0.015, xlabel, ha="center", fontsize=10)
-    fig.text(0.008, 0.5, ylabel, va="center", rotation="vertical", fontsize=10)
+# _facet_layout / _fig_axis_labels 已收口到 diag/figstyle（那边不 import
+# matplotlib，所以布局算术与标签映射本机就能测）。这两个薄壳保留是为了
+# 不改这个文件里既有的调用点。
+_facet_layout = facet_layout
+_fig_axis_labels = fig_axis_labels
 
 
 def _facet_grid(facet_by: str):
-    """(nrow, ncol, fig, axes_flat) —— 供 E1/E2 分面复用的画布。"""
+    """(fig, axes_flat, nrow, ncol) —— 供 E1/E2 分面复用的画布。
+
+    返回 nrow/ncol 是为了让调用方能把它们交给 ``finish_facets``：
+    要修好「中间 panel 没有 x 刻度标签」，必须知道网格形状。
+    """
     def build(n: int):
-        nrow, ncol = _facet_layout(n)
+        nrow, ncol = facet_layout(n)
         fig, axes = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.2 * nrow),
                                  sharex=True, sharey=True, squeeze=False)
-        return fig, axes.ravel()
+        return fig, axes.ravel(), nrow, ncol
     return build
 
 
@@ -513,7 +527,7 @@ def plot_e1_1(frame: pd.DataFrame, out_path, *,
     """
     facets = sorted(frame[facet_by].unique())
     colors = _level_colors(frame[line_by].tolist())
-    fig, axes = _facet_grid(facet_by)(len(facets))
+    fig, axes, nrow, ncol = _facet_grid(facet_by)(len(facets))
     for axis, fval in zip(axes, facets):
         block = frame[frame[facet_by] == fval]
         for lval in sorted(block[line_by].unique()):
@@ -527,13 +541,11 @@ def plot_e1_1(frame: pd.DataFrame, out_path, *,
         axis.set_title(_fmt_level(facet_by, fval), fontsize=9)
         axis.set_ylim(0.0, 1.0)
         axis.grid(alpha=0.3)
-    for axis in axes[len(facets):]:      # 多出来的空面隐藏
-        axis.set_axis_off()
+    # 隐藏空面 + 把每列最下面那个可见 panel 的 x 刻度标签打开
+    finish_facets(axes, len(facets), nrow, ncol)
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, fontsize=8, loc="center right",
-               title=_VAR_SHORT.get(line_by, line_by))
-    _fig_axis_labels(fig, "Communication round",
-                     f"Backdoor ASR [{ASR_COLUMN}]")
+    outside_legend(fig, handles, labels, title=pretty_label(line_by, short=True))
+    _fig_axis_labels(fig, pretty_label("round"), asr_axis_label(ASR_COLUMN))
     fig.suptitle(f"E1-1  Backdoor formation (faceted by "
                  f"{_VAR_SHORT.get(facet_by, facet_by)}, mean over seeds)")
     return _finish(fig, out_path,
@@ -556,7 +568,7 @@ def plot_e1_2(frame: pd.DataFrame, out_path,
     colors = _level_colors(frame[line_by].tolist())
     markers = ["o", "s", "^", "D", "v", "P"]
     seeds = sorted(frame["seed"].unique())
-    fig, axes = _facet_grid(facet_by)(len(facets))
+    fig, axes, nrow, ncol = _facet_grid(facet_by)(len(facets))
     for axis, fval in zip(axes, facets):
         block = frame[frame[facet_by] == fval]
         seen = set()
@@ -575,13 +587,17 @@ def plot_e1_2(frame: pd.DataFrame, out_path,
         axis.set_title(_fmt_level(facet_by, fval), fontsize=9)
         axis.set_ylim(0.0, 1.0)
         axis.grid(alpha=0.3)
-    for axis in axes[len(facets):]:
-        axis.set_axis_off()
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, fontsize=8, loc="center right",
-               title=_VAR_SHORT.get(line_by, line_by))
-    _fig_axis_labels(fig, "Main task accuracy (MTA, personalized)",
-                     f"Backdoor ASR [{ASR_COLUMN}]")
+    finish_facets(axes, len(facets), nrow, ncol)
+    # legend **按 line_by 的数值排序**重建，不用 get_legend_handles_labels()。
+    # 后者给的是「画上去的顺序」，而上面是 `groupby("run_id")` 在遍历 ——
+    # run_id 是字符串，于是 Nm 的图例排成 16,1,2,32,4,8（报告 E1-2 就是这样）。
+    from matplotlib.lines import Line2D
+    ordered = sorted(frame[line_by].unique())
+    handles = [Line2D([], [], color=colors[v], marker="o", linestyle="none",
+                      markersize=5) for v in ordered]
+    labels = [_fmt_level(line_by, v) for v in ordered]
+    outside_legend(fig, handles, labels, title=pretty_label(line_by, short=True))
+    _fig_axis_labels(fig, pretty_label(MTA_COLUMN), asr_axis_label(ASR_COLUMN))
     facet_short = _VAR_SHORT.get(facet_by, facet_by)
     has_line = bool(verdict and np.isfinite(
         verdict.get("mta_at_cross_mean", np.nan)))
@@ -620,9 +636,11 @@ def plot_e1_4(response: pd.DataFrame, out_path) -> Path:
     nm_fixed, rho_fixed = _infer_cross_center(response)
     panels = (
         (left, "bad_client_num", "poison_rate", rho_fixed,
-         "Number of malicious clients", f"rho fixed = {rho_fixed:g}"),
+         pretty_label("bad_client_num"),
+         _fmt_level("poison_rate", rho_fixed) + " (fixed)"),
         (right, "poison_rate", "bad_client_num", nm_fixed,
-         "Poisoning probability rho", f"Nm fixed = {nm_fixed}"),
+         pretty_label("poison_rate"),
+         _fmt_level("bad_client_num", nm_fixed) + " (fixed)"),
     )
     for axis, xcol, other, other_fixed, xlabel, sub in panels:
         arm = response[response[other] == other_fixed]     # 只保留单轴那条线
@@ -642,8 +660,8 @@ def plot_e1_4(response: pd.DataFrame, out_path) -> Path:
         axis.set_xlabel(f"{xlabel}\n({sub})")
         axis.set_ylim(0.0, 1.0)
         axis.grid(alpha=0.3)
-    left.set_ylabel("Backdoor ASR (tail mean)")
-    fig.suptitle(f"E1-4  Dose-response along each single axis  [{ASR_COLUMN}]")
+    left.set_ylabel(asr_axis_label(ASR_COLUMN, suffix="(tail mean)"))
+    fig.suptitle("E1-4  Dose-response along each single axis")
     return _finish(fig, out_path,
                    "Each panel holds the other variable fixed at the cross "
                    "centre, so it is a true single-axis sweep.  Grey dots are "
@@ -671,8 +689,8 @@ def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
     axis.set_xticklabels([f"{c:g}" for c in cols])
     axis.set_yticks(range(len(rows)))
     axis.set_yticklabels([str(r) for r in rows])
-    axis.set_xlabel("Poisoning probability rho")
-    axis.set_ylabel("Number of malicious clients Nm")
+    axis.set_xlabel(pretty_label("poison_rate"))
+    axis.set_ylabel(pretty_label("bad_client_num"))
     # 每格标数值；缺失格留白并写 "-"，让"没跑"与"跑出来是 0"区分开
     for i in range(len(rows)):
         for j in range(len(cols)):
@@ -684,8 +702,8 @@ def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
             else:
                 axis.text(j, i, "-", ha="center", va="center", fontsize=8,
                           color="0.6")
-    fig.colorbar(mesh, ax=axis, label=f"Backdoor ASR [{ASR_COLUMN}] (tail mean)",
-                 shrink=0.85)
+    fig.colorbar(mesh, ax=axis, shrink=0.85,
+                 label=asr_axis_label(ASR_COLUMN, suffix="(tail mean)"))
     axis.set_title("E1-5  Dose-response surface (ASR over the Nm x rho grid)")
     return _finish(fig, out_path,
                    "Cells are the tail-mean ASR averaged over seeds.  Blank/'-' "
@@ -710,7 +728,7 @@ def plot_e1_6(tiers: pd.DataFrame, out_path) -> Path:
 
     rhos = sorted(tiers["poison_rate"].unique())
     colors = _level_colors(sorted(tiers["tier"].unique()))
-    fig, axes = _facet_grid("poison_rate")(len(rhos))
+    fig, axes, nrow, ncol = _facet_grid("poison_rate")(len(rhos))
     for ax, rho in zip(axes, rhos):
         block = tiers[tiers["poison_rate"] == rho]
         for tier in sorted(block["tier"].unique()):
@@ -720,22 +738,31 @@ def plot_e1_6(tiers: pd.DataFrame, out_path) -> Path:
                     grouped.to_numpy(dtype=float), marker="o", markersize=4,
                     linewidth=1.8, color=colors[tier], label=str(tier))
         ax.set_xscale("log", base=2)          # N_m 是 1,2,4,8,16,32
-        ax.set_title(f"rho={rho:g}", fontsize=9)
+        ax.set_title(_fmt_level("poison_rate", rho), fontsize=9)
         ax.set_ylim(0.0, 1.0)
         ax.grid(alpha=0.3)
-    for ax in axes[len(rhos):]:
-        ax.set_axis_off()
+    finish_facets(axes, len(rhos), nrow, ncol)
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, fontsize=8, loc="center right", title="ASR scope")
-    _fig_axis_labels(fig, "Number of malicious clients Nm",
+    outside_legend(fig, handles, labels, title="ASR scope")
+    _fig_axis_labels(fig, pretty_label("bad_client_num"),
                      "Backdoor ASR (tail mean)")
+    # 图注按**实际用的列**说话。旧版把 "All still unfiltered (target class
+    # included)" 写死，于是换成 filtered 口径之后图注会直接撒谎 ——
+    # 而这正是导师第 2 条问的那件事。
+    used = sorted(set(tiers.get("source_column", pd.Series(dtype=str))))
+    if used and all(c.startswith("asr_paper_filtered") for c in used):
+        conv = "Target class excluded from the denominator (filtered)."
+    elif used and not any(c.startswith("asr_paper_filtered") for c in used):
+        conv = ("Target class INCLUDED in the denominator (unfiltered) -- "
+                "the report's main text uses the filtered convention.")
+    else:
+        conv = f"Mixed ASR conventions in one figure: {', '.join(used)}."
     fig.suptitle("E1-6  ASR by scope: benign (victims) vs all vs malicious")
     return _finish(fig, out_path,
                    "'all' = mean over the benign eval subset + the malicious "
                    "clients (own models ~1.0); it rises with Nm mainly because "
                    "the malicious fraction grows.\n'benign' is the honest "
-                   "victim-transfer ASR.  All still unfiltered (target class "
-                   "included).")
+                   "victim-transfer ASR.  " + conv)
 
 
 def restrict_to_common_dose(frame: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
@@ -766,10 +793,14 @@ def plot_e1b_1(frame: pd.DataFrame, out_path) -> Path:
     """E1B-1：各调度的 ASR_t，投毒轮次加底色。剂量已统一。"""
     frame, dose_note = restrict_to_common_dose(frame)
     schedules = sorted(frame["schedule"].unique())
-    fig, axes = plt.subplots(len(schedules), 1, sharex=True,
-                             figsize=(7.6, 1.7 * len(schedules) + 1.0),
-                             squeeze=False)
-    for axis, kind in zip(axes[:, 0], schedules):
+    # 6 个 panel 竖排 = 11 英寸高，**被 PDF 从中间截断**（报告 Figure 8 就断在
+    # p.6/p.7 之间）。改成网格：facet_layout 给 6 -> 2x3，高度回到 ~7 英寸。
+    nrow, ncol = facet_layout(len(schedules))
+    fig, axes_grid = plt.subplots(nrow, ncol, sharex=True, sharey=True,
+                                  figsize=(4.6 * ncol, 2.6 * nrow),
+                                  squeeze=False)
+    axes = axes_grid.ravel()
+    for axis, kind in zip(axes, schedules):
         block = frame[frame["schedule"] == kind]
         for run_id, group in block.groupby("run_id"):
             group = group.sort_values("round")
@@ -787,13 +818,27 @@ def plot_e1b_1(frame: pd.DataFrame, out_path) -> Path:
                     axis.axvspan(left, left + width, color="0.75", alpha=0.35,
                                  zorder=0, linewidth=0)
         axis.set_ylim(0.0, 1.0)
-        axis.set_ylabel(kind, fontsize=8)
+        # 调度名放**标题**，把 y 轴标签槽让出来 —— 旧版把 kind 写在 y 轴上，
+        # 于是整张图从头到尾没有一处说明纵轴是什么（导师第 3 条点名的那件事）。
+        axis.set_title(kind, fontsize=9)
         axis.grid(alpha=0.25)
-    axes[-1, 0].set_xlabel("Communication round")
-    title = "E1B-1  ASR (red) and MTA (blue dashed) per schedule"
+    finish_facets(axes, len(schedules), nrow, ncol)
+    # 红/蓝/灰的含义此前只写在标题里；给一个真的图例。
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    outside_legend(
+        fig,
+        [Line2D([], [], color="tab:red", linewidth=1.6),
+         Line2D([], [], color="tab:blue", linewidth=1.2, linestyle="--"),
+         Patch(facecolor="0.75", alpha=0.35)],
+        [asr_axis_label(ASR_COLUMN), pretty_label(MTA_COLUMN),
+         "poisoning active"],
+        title="series")
+    _fig_axis_labels(fig, pretty_label("round"), "ASR / MTA")
+    title = "E1B-1  Backdoor formation per attack schedule"
     if dose_note:
         title += f"\nall panels at a single dose: {dose_note.split('（')[0]}"
-    axes[0, 0].set_title(title)
+    fig.suptitle(title)
     return _finish(fig, out_path,
                    "Grey bands mark rounds where poisoning was active "
                    "(sampled at the evaluation cadence, so band edges are "
@@ -850,7 +895,7 @@ def plot_e1b_2(persistence: pd.DataFrame, out_path,
             axis.axvline(half, color=colors[kind], linestyle=":", linewidth=1.0,
                          alpha=0.7)
     axis.set_xlabel("Rounds since the attack stopped")
-    axis.set_ylabel("Backdoor ASR")
+    axis.set_ylabel(asr_axis_label(ASR_COLUMN))
     axis.set_ylim(0.0, 1.0)
     axis.grid(alpha=0.3)
     legend_title = ("trigger-freeze (start ASR, half-life)"
@@ -899,6 +944,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "会自动回退并打印提示；只想要最终轮的精确 filtered "
                              "也可以用 diag.recompute_asr_final。")
     args = parser.parse_args(argv)
+
+    # 出版级 rcParams（字号/网格/spines/savefig dpi）。放在任何一张图之前。
+    apply_publication_style()
 
     frame = load_runs(args.implantation_glob)
     out_dir, prefix = Path(args.out_dir), Path(args.summary_prefix)
