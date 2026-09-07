@@ -51,7 +51,7 @@ from . import REPO_ROOT  # noqa: F401  (副作用：把仓库根目录加入 sys
 from .config import Cfg, load_config, make_select_rule, set_all_seeds
 from .hooks import (attach_generator_checkpoint_hook, build_client_meta,
                     compare_run_checkpoints, extract_generator, run_dir_name,
-                    save_generator_meta, save_run)
+                    save_generator_meta, save_run, save_state_dict)
 from .snapshots import (SnapshotRecorder, build_grid, select_snapshot_clients)
 from .defenses import ABLATION_VARIANTS, DEFENSES, build_defense, use_defense
 from .instrumentation import RoundRecorder
@@ -387,6 +387,19 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
     # 否则不同恶意密度的 run 会互相覆盖 —— 而且覆盖是静默的。
     base_name = run_dir_name(mode, alpha, seed) + (f"_{run_tag}" if run_tag else "")
     ckpt_dir = ckpt_root / base_name
+
+    # 训练开始前把全局模型的**初始**权重存一份。
+    #
+    # 这是 PFL 臂正确性的**参照系**：判断某组参数「有没有被聚合」，唯一决定性的
+    # 读数就是「它相对初始值动没动」。没有这份快照，只能比较客户端之间的差异，
+    # 而客户端在收到广播后还会本地训练，所以任何一组参数最后都是各不相同的
+    # —— 那种比较区分不出「私有」与「共享后又各自训了」。
+    #
+    # 有了它，fedbn 与 fedrep 互为对照，判据是逐位的：
+    #   fedbn ：global 的 BN 逐位不变（私有，从不聚合）、linear 变了（共享）
+    #   fedrep：global 的 linear 逐位不变（私有）、BN 变了（聚合）
+    # 消费者：diag/evidence_fedrep.py
+    save_state_dict(server.global_model, ckpt_dir / "init_global.pt")
     if mode == "attack":
         # clean run 完全跳过 use_our_attack —— 不是构造空的攻击对象。
         # 原实现在没有 PoisonClient 时会 UnboundLocalError（eval_func 未赋值），
