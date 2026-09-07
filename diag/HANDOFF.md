@@ -9,6 +9,61 @@
 
 ---
 
+## 0'. 新增：与 tf-dpfl 对齐的能力（2026-09-07）
+
+导师意见触发的一轮口径/框架对齐。**两件都不改既有列与既有行为**，
+但它们改变了「下一批 exp1 该怎么跑」。
+
+### FedRep 臂（`diag/pfl_fedrep.py`，CLI `--pfl fedrep`）
+
+上游 `pfl.py` 只有 FedBN；而 tf-dpfl 的 Experiment 3 跑的是 `hier_fedrep`。
+两者的「个性化」几乎是**互补**的：
+
+| | 私有（不聚合） | 共享 |
+|---|---|---|
+| FedBN（上游） | BN 的 γ/β + running stats | 分类头 |
+| FedRep（新增） | 分类头 `linear.*` | BN（含 running stats） |
+
+→ **两组 ASR 在语义上不可直接比大小**，只能比趋势形状。
+（报告 §2 把 Exp 1/1B 的框架写成了 FedRep，实际跑的是 FedBN。）
+
+用法：`python -m diag.run_exp1 --pfl fedrep ...`。
+臂名会进 run tag（`e1` → `e1_fedrep`），两条臂的 CSV 互不覆盖；
+fedbn 保持原命名，旧 run 仍可 `--skip-existing` 续跑。
+
+**一个必须知道的后果**：FedRep 下 BN 参与聚合 → `server.global_model` 的 BN
+**会**更新，全局模型是个可用模型，与 FedBN 臂完全相反（README §4b 说的
+「BN 从初始化起一位不变」只对 fedbn 臂成立）。所以：
+- 两条臂的 `acc_global` **不可同框**；
+- `track.py` 的「借 BN」机制（`_borrowed_bn_state`）在 FedRep 臂上是多余的。
+
+### 逐轮 filtered ASR（`asr_paper_filtered_*`）
+
+`asr_paper_*` 一直是 **unfiltered**（分母含目标类，复刻 `main.py:131`），
+而 tf-dpfl 是 **filtered**。CIFAR-10 下差约 10 个百分点。
+现在两个口径在**同一次前向**里一起算出来（零额外机时），新增三列。
+`analysis_exp1 --asr-column asr_paper_filtered_benign` 即可用。
+**跨库比较或对外报数一律用 filtered。**
+旧 run 没有这列，`resolve_asr_column` 会回退并打印提示。
+
+### ⚠️ 开跑前必做
+
+本轮的测试有一部分**在开发容器里没有 torch/numpy，我没有执行过**：
+`test_pfl_fedrep` 的 5 条（逐位冻结不变量等）、`test_paper_asr_filtered` 的 4 条
+（手算对拍等）、`test_run_exp1` 的 4 条（两臂 tag 不相交等）。
+上机后先跑
+
+```bash
+python -m diag.tests.run_tests test_pfl_fedrep
+python -m diag.tests.run_tests test_paper_asr_filtered
+python -m diag.tests.run_tests test_run_exp1
+```
+
+确认它们是 **PASS 而不是 SKIP**，再烧机时。
+（运行器本轮加了真 skip 语义——此前跳过的用例会被记成 PASS，是假绿。）
+
+---
+
 ## 0. 当前主线（2026-09-02 起）：`diag/PLAN_T0T4.md`
 
 B2 持续性曲线跑出来了。**上游任务书「200 轮不衰减」的前提不成立** —— 实际是
