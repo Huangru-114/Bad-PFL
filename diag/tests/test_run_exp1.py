@@ -11,6 +11,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from pathlib import Path as _P
+
+ROOT = _P(__file__).resolve().parent.parent.parent
+
 from diag.run_exp1 import csv_has_paper_column, implantation_csv
 
 
@@ -192,7 +196,9 @@ def test_local_steps_is_the_only_axis_that_varies():
                  "--select-per-round", "--alpha", "--pfl"):
         vals = {_arg(j["cmd"], flag) for j in jobs}
         assert len(vals) == 1, f"{flag} 在标定批里不恒定：{vals}"
-    assert len({_arg(j["cmd"], "--local-steps") for j in jobs}) == 3
+    # 档数从 config 读，不写死 —— 网格一加档这条就该跟着走
+    n_levels = len(_cfg().exp1.calibration.local_steps)
+    assert len({_arg(j["cmd"], "--local-steps") for j in jobs}) == n_levels
 
 
 def test_calib_uses_the_shortened_budget_and_denser_eval():
@@ -289,7 +295,9 @@ def test_cost_reports_a_span_when_runs_differ():
     from diag.run_exp1 import build_commands, estimate_cost
     cfg = load_config("diag/config.yaml")
     cost = estimate_cost(build_commands(cfg, "calib", seeds=[0]), cfg)
-    assert cost["local_steps_per_run"] == "15-75", cost["local_steps_per_run"]
+    steps = [int(x) for x in cfg.exp1.calibration.local_steps]
+    want = f"{min(steps)}-{max(steps)}"      # 区间端点从 config 推，不写死
+    assert cost["local_steps_per_run"] == want, cost["local_steps_per_run"]
     assert isinstance(cost["local_batches_per_run"], str)
 
 
@@ -400,3 +408,69 @@ def test_list_only_and_execute_are_mutually_exclusive():
         assert e.code == 2
         return
     raise AssertionError("--list-only 与 --execute 同时给应当报错")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 标定网格必须覆盖导师要的 3–5 local epoch
+# ══════════════════════════════════════════════════════════════════════════
+CIFAR10_TRAIN_N = 50000     # main.py:59 torchvision.datasets.CIFAR10(train=True)
+
+
+def _steps_per_epoch(exp1) -> int:
+    """1 个 local epoch = 多少个 local_steps。
+
+    `client.py:44` 的 `local_fine_tuning(iter_nums)` 逐 batch 循环，
+    `fetch_data` 用完自动重开一轮 —— 所以 local_steps **就是 batch 数**。
+    每客户端训练样本 = 50000 / client_num（main.py:65 的整除），
+    DataLoader 是 batch_size=32 + drop_last=True（main.py:78-80）。
+    """
+    per_client = CIFAR10_TRAIN_N // int(exp1.client_num)
+    return per_client // 32
+
+
+def test_steps_per_epoch_matches_the_partition_formula():
+    """换算的分母跟着 config 走 —— client_num 一改，下面那条断言的
+    epoch 数就得跟着变，不能写死。"""
+    exp1 = _cfg().exp1
+    assert _steps_per_epoch(exp1) == 39, (
+        f"client_num={exp1.client_num} 下每 epoch 是 "
+        f"{_steps_per_epoch(exp1)} steps，注释里的换算要同步更新")
+
+
+def test_calibration_grid_reaches_the_supervisor_range():
+    """导师意见 #5 要的是 **3–5 local epoch**。
+
+    早先网格写成 [15, 45, 75]，上限才 1.9 epoch —— **根本没进那个区间**，
+    标定跑完也回答不了导师的问题。这条挡住它重演。
+    """
+    exp1 = _cfg().exp1
+    spe = _steps_per_epoch(exp1)
+    epochs = sorted(float(s) / spe for s in exp1.calibration.local_steps)
+    assert max(epochs) >= 5.0 - 0.05, \
+        f"网格上限只有 {max(epochs):.2f} epoch，导师要到 5"
+    assert any(2.95 <= e <= 3.05 for e in epochs), \
+        f"网格里没有 3 epoch 那一档：{[round(e, 2) for e in epochs]}"
+    assert min(epochs) < 1.0, \
+        f"缺少现状基线（<1 epoch）那一档：{[round(e, 2) for e in epochs]}"
+
+
+def test_calibration_grid_is_sorted_and_unique():
+    steps = [int(s) for s in _cfg().exp1.calibration.local_steps]
+    assert steps == sorted(steps) and len(set(steps)) == len(steps)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Exp 1 的主力臂是 fedrep（与 Exp 3 对齐），fedbn 只作对照
+# ══════════════════════════════════════════════════════════════════════════
+def test_submitters_default_to_the_fedrep_arm():
+    """用户决策：Exp 1 改成和 Exp 3 一样的 FedRep。
+
+    `run_exp1.py` 自己的默认值仍是 fedbn（为了让 2026-08 之前的 fedbn 产物
+    在 --skip-existing 下仍认得出，那些 tag 不带后缀），所以**提交器必须
+    显式传 --pfl**，不能依赖那个默认值。
+    """
+    from pathlib import Path
+    for name in ("submit_exp1.sh", "run_calib.sbatch"):
+        src = (ROOT / "diag" / name).read_text(encoding="utf-8")
+        assert 'PFL="${PFL:-fedrep}"' in src, f"{name} 的默认臂不是 fedrep"
+        assert "--pfl" in src, f"{name} 没有显式传 --pfl"

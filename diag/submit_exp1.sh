@@ -46,7 +46,11 @@ cd "$ROOT"
 source "$ROOT/diag/cluster_env.sh"
 
 SEEDS="${SEEDS:-}"
-PFL="${PFL:-fedbn}"
+# **默认 fedrep**：Exp 1 与 Exp 3 对齐（用户决策）。fedbn 只作为对照臂
+# （`--stage arm`）存在。`run_exp1.py` 自己的默认值仍是 fedbn —— 那是为了
+# 让 2026-08 之前的 fedbn 产物在 --skip-existing 下仍认得出（tag 不带后缀），
+# 所以**提交器一律显式传 --pfl**，不依赖那个默认值。
+PFL="${PFL:-fedrep}"
 LISTDIR="$ROOT/results/lists"
 mkdir -p "$LISTDIR"
 LIST="$LISTDIR/exp1_${STAGE}_${PFL}.txt"

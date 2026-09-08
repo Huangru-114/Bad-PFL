@@ -22,6 +22,9 @@
 set -uo pipefail
 
 SEEDS="${1:-0 1}"
+# 标定必须跑**主力要用的那条臂**，否则标出来的成本不适用。
+# 默认 fedrep（Exp 1 与 Exp 3 对齐）；PFL=fedbn 可换。
+PFL="${PFL:-fedrep}"
 
 ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 # shellcheck source=diag/cluster_env.sh
@@ -30,11 +33,11 @@ source "$ROOT/diag/cluster_env.sh"
 cd "$ROOT"
 echo "[calib] ROOT=$ROOT  SEEDS=$SEEDS"
 echo "[calib] 先 dry-run 打印清单（不跑），确认参数对得上："
-$PY -m diag.run_exp1 --stage calib --seeds $SEEDS
+$PY -m diag.run_exp1 --stage calib --pfl "$PFL" --seeds $SEEDS
 
 echo
 echo "[calib] 开始执行 ——"
-$PY -m diag.run_exp1 --stage calib --seeds $SEEDS --execute
+$PY -m diag.run_exp1 --stage calib --pfl "$PFL" --seeds $SEEDS --execute
 RC=$?
 
 echo "[calib] exit code = $RC"

@@ -141,3 +141,41 @@ def test_array_caps_concurrency():
     """一次占满队列会挡住别人（也挡住自己的标定）。"""
     code = _code(SUBMIT)
     assert "%" in code and "--array=" in code, "没有 array 并发上限"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# FedRep 门禁：烧 100 个 run 之前先证明它真的在做 FedRep
+# ══════════════════════════════════════════════════════════════════════════
+VERIFY = ROOT / "diag" / "verify_fedrep.sbatch"
+
+
+def test_fedrep_verification_gate_exists():
+    """FedRep 是本轮新写的旁路实现，**从没在集群上跑过**，而 Stage B/D 现在
+    默认就是 fedrep。没有门禁 = 拿 100 个 GPU-run 赌一个没跑过的实现。"""
+    assert VERIFY.exists(), "缺 diag/verify_fedrep.sbatch"
+
+
+def test_gate_covers_all_three_checks():
+    code = _code(VERIFY)
+    assert "diag.tests.run_tests test_pfl_fedrep" in code, \
+        "没跑单元测试（本机 skip 掉的 5 条只有在集群上才真跑）"
+    assert code.count("--pfl") >= 1 and "fedbn" in code and "fedrep" in code, \
+        "没有两条臂各跑一个短 run"
+    assert "diag.evidence_fedrep" in code, "没有对拍两条臂冻结了哪些参数"
+
+
+def test_gate_stops_on_the_first_failure():
+    """任一步失败必须立刻退出并给非零码 —— 门禁「跑完但没过」等于没有门禁。"""
+    code = _code(VERIFY)
+    assert code.count("exit \"$RC\"") >= 2, "中间步骤失败没有立刻退出"
+    assert "RC=${PIPESTATUS[0]}" in code, \
+        "用 tee 之后没取管道首个命令的退出码（会永远拿到 tee 的 0）"
+
+
+def test_gate_is_cheap():
+    """门禁比一个主力 run 还便宜才会有人跑它。"""
+    code = _code(VERIFY)
+    assert 'ROUNDS="${VERIFY_ROUNDS:-10}"' in code, "轮数不是短跑"
+    head = "\n".join(ln for ln in VERIFY.read_text(encoding="utf-8").splitlines()
+                     if ln.startswith("#SBATCH"))
+    assert "-t 02:00:00" in head, f"时限不像短跑：\n{head}"

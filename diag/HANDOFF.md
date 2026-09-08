@@ -247,6 +247,21 @@ python3 -m diag.read_calibration      # 读数：纯 stdlib，容器内外都行
 - 与 tf-dpfl 侧 (`experiments/calibration/`, `local_epochs in {1,3,5}`) 用**同一套
   判据**，但 local budget 的单位不同（step vs epoch），各标各的，别直接对读。
 
+## 4a. FedRep 门禁（**在 Stage B/D 之前**）
+
+```bash
+sbatch diag/verify_fedrep.sbatch      # 约 30-60 分钟，比一个主力 run 还便宜
+```
+
+FedRep 是本轮在 `diag/pfl_fedrep.py` 新写的旁路实现，**从没在集群上跑过**，
+而 Stage B/D 现在默认就是 fedrep（用户决策：Exp 1 与 Exp 3 对齐）。
+不先验证 = 拿 100 个 GPU-run 赌一个没跑过的实现。
+
+三步，任一步失败立刻非零退出：
+1. `test_pfl_fedrep` 全部 15 条（本机只能跑 10 条，5 条需要 torch —— 在这里才真跑）
+2. fedbn / fedrep 各一个 10 轮短 run
+3. `evidence_fedrep` 对拍：fedrep 臂 `linear.*` 不动、BN 变；fedbn 臂反过来
+
 ## 4c. Stage D 主力重跑（Exp 1，job array）
 
 **先跑完 Stage B 标定**（§4b）：单 run 成本由那边的 `GPU-s→plat` 给出，
@@ -261,12 +276,18 @@ bash diag/submit_exp1.sh arm              # 对照臂 fedbn（3）
 PFL=fedrep bash diag/submit_exp1.sh arm   # 对照臂 fedrep（3）
 ```
 
-| 阶段 | 格 | seed | run | 本地 batch |
-|---|---|---|---|---|
-| 十字扫描 `1` | 13 | 5 | 65 | 1,560,000 |
-| 塌陷角 `corner` | 6 | 5 | 30 | 720,000 |
-| 对照臂 `arm` ×2 | 1+1 | 3 | 6 | 144,000 |
-| **Stage D 合计** | | | **101** | **2,424,000** |
+| 阶段 | 格 | seed | run | 本地 batch | 主力当量 |
+|---|---|---|---|---|---|
+| 门禁 `verify_fedrep` | — | — | 2 | 2,400 | 0.1× |
+| B 标定 `calib` | 4 | 2 | 8 | 468,480 | 19.5× |
+| 十字扫描 `1` | 13 | 5 | 65 | 1,560,000 | 65× |
+| 塌陷角 `corner` | 6 | 5 | 30 | 720,000 | 30× |
+| 对照臂 `arm` ×2 | 1+1 | 3 | 6 | 144,000 | 6× |
+| **合计** | | | **111** | **2,894,880** | **120.6×** |
+
+> 「主力当量」= 折算成多少个主力 run（1 个主力 run = 24,000 本地 batch）。
+> **标定占 19.5×**，因为网格要覆盖导师要的 5 epoch = 195 steps = 基线的 13 倍。
+> 这 19.5 个当量是全盘最有杠杆的部分 —— 它定的是后面 101 个 run 的单价。
 
 - **一个 array task = 一个 run**（`exp1_array.sbatch`）。顺序跑装不下 101 个
   小时量级的 run，也没有断点续跑。默认并发上限 8，`--max-parallel N` 可调。
