@@ -6,10 +6,14 @@
 #SBATCH -p gpu
 #SBATCH --job-name=badpfl-calib
 # ══════════════════════════════════════════════════════════════════════════
-# run_calib.sbatch  —  Stage B 收敛标定（导师意见 #5）的 6 个 run。
+# run_calib.sbatch  —  Stage B 收敛标定（导师意见 #5）。
 #
-#   sbatch diag/run_calib.sbatch              # local_steps {15,45,75} x seed {0,1}
-#   sbatch diag/run_calib.sbatch 0            # 只跑 seed 0（3 个 run，先探路）
+#   sbatch diag/run_calib.sbatch              # exp1.calibration.local_steps x seed {0,1}
+#   sbatch diag/run_calib.sbatch 0            # 只跑 seed 0（先探路）
+#
+# 网格由 config 的 `exp1.calibration.local_steps` 决定（当前 [15,39,117,195]
+# = 0.38/1/3/5 epoch），**不写死在这里** —— 早先的 {15,45,75} 上限才 1.9 epoch，
+# 根本没进导师要的 3–5 epoch 区间。run 数 = len(local_steps) x len(SEEDS)。
 #
 # ⚠️ **必须整个跑在容器里**：`run_exp1.py --execute` 会用
 #    `subprocess.run(["python", "-m", "diag.run_fl", ...])` 逐个起子进程，
