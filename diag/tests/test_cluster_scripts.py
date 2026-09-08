@@ -93,3 +93,51 @@ def test_container_path_is_not_hardcoded_in_sbatch():
     for path in SBATCH:
         assert SIF not in _code(path), \
             f"{path.name} 硬写了容器路径；source cluster_env.sh 用 $PY"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Stage D：job array 的接线
+# ══════════════════════════════════════════════════════════════════════════
+ARRAY = ROOT / "diag" / "exp1_array.sbatch"
+SUBMIT = ROOT / "diag" / "submit_exp1.sh"
+
+
+def test_stage_d_scripts_exist():
+    assert ARRAY.exists() and SUBMIT.exists()
+
+
+def test_array_task_reads_its_own_line():
+    """一个 array task = 一条命令。靠 SLURM_ARRAY_TASK_ID 取行，
+    所以必须(a)要求该变量存在、(b)按行号取、(c)取不到就报错而不是静默跑空。"""
+    code = _code(ARRAY)
+    assert "SLURM_ARRAY_TASK_ID" in code, "没用 array task id"
+    assert 'sed -n "${IDX}p"' in code, "不是按行号取命令"
+    assert '[ -n "$CMD" ]' in code, "空行没有拦截 —— 会静默跑一个空命令"
+
+
+def test_array_runs_inside_the_container():
+    """清单里的命令以裸 `python -m diag.run_fl` 开头，必须换成 $PY。"""
+    code = _code(ARRAY)
+    assert 'RUN="${CMD/#python /$PY }"' in code, "没有把 python 换成 $PY"
+    assert "diag/cluster_env.sh" in code, "没 source cluster_env.sh"
+
+
+def test_submitter_uses_the_no_gpu_interpreter():
+    """生成清单在**登录节点**跑，那里没有 NVIDIA 驱动 —— 用带 --nv 的 $PY
+    会让容器直接起不来。tf-dpfl 为此连拆三轮正确设计（其 CLAUDE.md 陷阱 #17）。"""
+    code = _code(SUBMIT)
+    assert "$PY_NOGPU" in code, "提交器没用 $PY_NOGPU"
+    assert not re.search(r"\$PY\s+-m\s+diag", code), "提交器用了带 --nv 的 $PY"
+
+
+def test_no_gpu_interpreter_really_drops_nv():
+    env = _code(ENV)
+    m = re.search(r'PY_NOGPU="apptainer exec ([^"]*)"', env)
+    assert m, "cluster_env.sh 里没有 PY_NOGPU"
+    assert "--nv" not in m.group(1), f"PY_NOGPU 还带着 --nv：{m.group(1)}"
+
+
+def test_array_caps_concurrency():
+    """一次占满队列会挡住别人（也挡住自己的标定）。"""
+    code = _code(SUBMIT)
+    assert "%" in code and "--array=" in code, "没有 array 并发上限"

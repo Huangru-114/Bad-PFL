@@ -43,12 +43,24 @@ elif command -v apptainer >/dev/null 2>&1 && [ -f "$BADPFL_SIF" ]; then
         PY="apptainer exec --nv $BADPFL_SIF python"
     fi
     PY_MODE="apptainer"
+
+    # 不带 --nv 的同一个容器。**登录节点没有 NVIDIA 驱动，`--nv` 会让容器
+    # 直接起不来** —— 生成命令清单、查文件这类不需要 GPU 的事必须用它。
+    # tf-dpfl 那边就是因为自检带了 --nv，在登录节点报「看不到仓库目录」，
+    # 把人引向 --bind，连拆三轮正确设计（见 tf-dpfl CLAUDE.md 陷阱 #17）。
+    if [ -n "$BADPFL_BIND" ]; then
+        PY_NOGPU="apptainer exec --bind $BADPFL_BIND $BADPFL_SIF python"
+    else
+        PY_NOGPU="apptainer exec $BADPFL_SIF python"
+    fi
 else
     # 本机：无 apptainer / 无容器 → 裸 python3。本机没有 torch，
     # 需要 torch 的测试会自己 skip（diag/tests/run_tests.py 支持 SkipTest）。
     PY="python3"
+    PY_NOGPU="python3"
     PY_MODE="local"
 fi
 
 # 静默地跑在错误的环境里是最难查的一类问题 —— 每次跑之前扫一眼这行。
+PY_NOGPU="${PY_NOGPU:-$PY}"          # override 模式下与 $PY 相同
 echo "[env] python = $PY   (mode=$PY_MODE)"

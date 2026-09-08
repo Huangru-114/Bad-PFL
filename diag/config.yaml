@@ -58,13 +58,32 @@ exp1:
     total_round: 80          # 主力是 200；标定只问「什么时候到平台」
     eval_every: 2            # 主力是 5；40 个点，轨迹够密才看得出拐点
     seeds: [0, 1]            # 记录用；实际 seed 由 --seeds 或 exp1.seeds 决定
+
+  # ── Stage D 主力重跑（`--stage corner` / `--stage arm`）────────────────
+  # 十字扫描（`--stage 1`）已由 bad_nums × poison_rates + *_fixed 定义，
+  # 这里只放它覆盖不到的两块。
+  main:
+    seeds: [0, 1, 2, 3, 4]   # 5 seed —— 报告 Figure 3/5/9 此前全是 n=1
+    collapse_corner:         # 塌陷角补丁：ρ 高端 × Nm 高端，刻画塌陷的形状
+      bad_nums: [4, 16, 32]
+      poison_rates: [0.7, 0.9, 1.0]
+    control_arm:             # FedBN vs FedRep 对照（把「框架不一致」变成对照）
+      seeds: [0, 1, 2]       # 只在交叉点 (bad_num_fixed, poison_rate_fixed) 上
   alpha: 0.5
   seeds: [0, 1]
   # 剂量扫描的两个轴。恶意终端扩到 16/32（40 客户端里 80% 也测）。
   # 十字扫描用 --full-grid 关掉 → 全因子 6×4=24 格；配 --seeds 0 + --skip-existing
   # 只补没跑过的格子。⚠️ 全因子×2 seed=48 个 run，先 seed0 目检。
   bad_nums: [1, 2, 4, 8, 16, 32]
-  poison_rates: [0.1, 0.25, 0.5, 1.0]
+  # ρ 加密到 8 档（导师意见 #4 点名要 0 / 0.3 / 0.7 / 0.9）：
+  #   ρ=0   **无攻击对照** —— 报告一直引用「no-attack baseline ASR」却从没进过
+  #         grid。ρ=0 时 `poison_mask = rand() <= 0` 全 False，投毒函数原样返回
+  #         （fba.py:48-49），而评估仍强制 ρ=1.0 打触发器，所以这一格给出的正是
+  #         「模型在完全没被投毒时对触发器的响应」= 真正的基线。
+  #   ρ=1.0 是**奇点不是极值**（生成器训练把已投毒数据当干净数据用，PGD 与
+  #         生成器损失对消，见 diag/METRICS.md）。0.7/0.9 就是用来判定
+  #         「渐进下滑」还是「孤立奇点」的。
+  poison_rates: [0, 0.1, 0.25, 0.3, 0.5, 0.7, 0.9, 1.0]
   # 单轴扫描时另一个变量固定在这里。
   # ρ 固定在 0.1：小规模探测里 (Nm=4, ρ=0.1) 是植入最强的组合（论文口径 ASR
   # >0.8），1B 要在能植入的剂量上才看得出时间结构的差异，也让 persistence 的

@@ -31,6 +31,8 @@ ResNet-10 / 200 轮估算，单个 run 在一张 GPU 上是小时量级 —— 3
 from __future__ import annotations
 
 import argparse
+import builtins
+import sys
 import subprocess
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -271,6 +273,52 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
                                           f"{total} rounds, eval every {every}"),
                              "csv": implantation_csv(results_dir, alpha, seed, tag)})
 
+    if stage == "corner":
+        # ── 塌陷角补丁（导师意见 #4）────────────────────────────────────
+        # ρ 高端 × Nm 高端的小方阵。十字扫描只在 Nm=4 这一列上扫 ρ，
+        # 于是「塌陷是随 Nm 加剧还是与 Nm 无关」看不出来。
+        # 与十字重叠的格子（Nm==bad_num_fixed）**跳过** —— 重复跑同一个配置
+        # 除了浪费机时，还会在并表时变成两个"独立"观测（dose_points 的同一条约束）。
+        if "main" not in exp1 or "collapse_corner" not in exp1.main:
+            raise ValueError("stage=corner 需要 config 的 exp1.main.collapse_corner")
+        corner = exp1.main.collapse_corner
+        bad_fixed = int(exp1.bad_num_fixed)
+        for bad in corner.bad_nums:
+            if int(bad) == bad_fixed:
+                continue                      # 已在十字扫描里
+            for rate in corner.poison_rates:
+                for seed in seeds:
+                    tag = _tag(_arm_prefix("e1", pfl), bad=int(bad),
+                               rho=float(rate), s=seed)
+                    cmd = _base_command(exp1, seed, alpha, instrument_root,
+                                        results_dir, ckpt_root, pfl=pfl,
+                                        layer_metrics=layer_metrics)
+                    cmd += ["--bad-client-num", str(int(bad)),
+                            "--poison-rate", str(float(rate)),
+                            "--run-tag", tag]
+                    jobs.append({"tag": tag, "stage": "corner", "cmd": cmd,
+                                 "describe": (f"collapse corner: Nm={bad}, "
+                                              f"rho={rate}"),
+                                 "csv": implantation_csv(results_dir, alpha,
+                                                         seed, tag)})
+
+    if stage == "arm":
+        # ── PFL 对照臂：只在十字交叉点上，两条臂各跑几个 seed ──────────────
+        # tag 里已经带臂名（_arm_prefix），所以两条臂的产物互不覆盖。
+        bad = int(exp1.bad_num_fixed)
+        rate = float(exp1.poison_rate_fixed)
+        for seed in seeds:
+            tag = _tag(_arm_prefix("e1", pfl), bad=bad, rho=rate, s=seed)
+            cmd = _base_command(exp1, seed, alpha, instrument_root,
+                                results_dir, ckpt_root, pfl=pfl,
+                                layer_metrics=layer_metrics)
+            cmd += ["--bad-client-num", str(bad),
+                    "--poison-rate", str(rate),
+                    "--run-tag", tag]
+            jobs.append({"tag": tag, "stage": "arm", "cmd": cmd,
+                         "describe": f"control arm pfl={pfl} @ Nm={bad}, rho={rate}",
+                         "csv": implantation_csv(results_dir, alpha, seed, tag)})
+
     if stage in ("persist", "all") and "persistence" in exp1:
         # B2 专用长跑：攻击窗口 [start, end) 把 ASR 顶到高位，再干净训练到 total。
         # 用 burst(start, end-start) 表达；burst 之后自动是干净轮次。
@@ -388,10 +436,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "的 hier_fedrep 对齐）。**它会进 run tag**，两条臂的"
                              "产物互不覆盖；fedbn 保持原命名以便续跑。")
     parser.add_argument("--stage", default="all",
-                        choices=["1", "1b", "persist", "calib", "all"],
+                        choices=["1", "1b", "persist", "calib", "corner",
+                                 "arm", "all"],
                         help="calib = Stage B 收敛标定（local_steps 扫描）。"
                              "**不含在 all 里** —— 它用的是缩短的预算与加密的"
-                             "评估点，和主力格子不可比，混进去会污染并表。")
+                             "评估点，和主力格子不可比，混进去会污染并表。\n"
+                             "corner = 塌陷角补丁（ρ 高端 × Nm 高端）；"
+                             "arm = PFL 对照臂（只在十字交叉点）。"
+                             "两者都**不含在 all 里**，按需单独提交。")
     parser.add_argument("--seeds", type=int, nargs="*", default=None)
     parser.add_argument("--full-grid", action="store_true",
                         help="全因子而不是十字扫描。第一阶段不要用 —— "
@@ -407,6 +459,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ckpt-root", default="./checkpoints")
     parser.add_argument("--execute", action="store_true",
                         help="真正执行；缺省只打印")
+    parser.add_argument("--list-only", action="store_true",
+                        help="**只**把命令逐行打到 stdout（其余信息走 stderr），"
+                             "供 SLURM job array 用 `sed -n \"${SLURM_ARRAY_TASK_ID}p\"` "
+                             "取第 N 条。与 --execute 互斥。")
     parser.add_argument("--skip-existing", action="store_true",
                         help="跳过植入 CSV 已带论文口径列 asr_paper_all 的 run —— "
                              "省机时。旧口径（无该列）的 CSV 仍会重跑。")
@@ -419,6 +475,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                           ckpt_root=args.ckpt_root,
                           full_grid=args.full_grid, seeds=args.seeds,
                           pfl=args.pfl, layer_metrics=args.layer_metrics)
+
+    if args.list_only and args.execute:
+        parser.error("--list-only 与 --execute 互斥：前者只输出清单给 job array")
+
+    # --list-only 时说明性输出全部改走 stderr，stdout 只留干净的命令行 ——
+    # job array 靠 `sed -n "${SLURM_ARRAY_TASK_ID}p"` 取行，混进一个字都会错位。
+    _out = sys.stderr if args.list_only else sys.stdout
+
+    def print(*a, **k):          # noqa: A001  局部遮蔽，仅本函数内生效
+        k.setdefault("file", _out)
+        return builtins.print(*a, **k)
 
     cost = estimate_cost(jobs, cfg)
     print(f"=== 实验 1 / 1B：{cost['n_runs']} 个 run ===")
@@ -443,6 +510,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         n_skip = sum(1 for j in jobs if j.get("skip"))
         print(f"  [--skip-existing] {n_skip}/{len(jobs)} 个 run 的 CSV 已带 "
               f"asr_paper_all，将跳过；实跑 {len(jobs) - n_skip} 个。")
+
+    if args.list_only:
+        # stdout：一行一条命令，**不带**注释/标记，跳过的也照常列出 ——
+        # array 的行号必须与清单严格对应，否则 --skip-existing 一变就整体错位。
+        for job in jobs:
+            builtins.print(" ".join(job["cmd"]))
+        print(f"\n[list-only] 已输出 {len(jobs)} 条命令到 stdout")
+        return 0
 
     print()
     for job in jobs:

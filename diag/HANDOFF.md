@@ -247,6 +247,35 @@ python3 -m diag.read_calibration      # 读数：纯 stdlib，容器内外都行
 - 与 tf-dpfl 侧 (`experiments/calibration/`, `local_epochs in {1,3,5}`) 用**同一套
   判据**，但 local budget 的单位不同（step vs epoch），各标各的，别直接对读。
 
+## 4c. Stage D 主力重跑（Exp 1，job array）
+
+**先跑完 Stage B 标定**（§4b）：单 run 成本由那边的 `GPU-s→plat` 给出，
+没有它就只能猜总机时。
+
+```bash
+bash diag/submit_exp1.sh 1 --dry-run      # 看清单与规模，不提交
+SEEDS="0" bash diag/submit_exp1.sh 1      # 单 seed 探路（13 个 job）
+bash diag/submit_exp1.sh 1                # 十字扫描全量（65 个 job）
+bash diag/submit_exp1.sh corner           # 塌陷角（30）
+bash diag/submit_exp1.sh arm              # 对照臂 fedbn（3）
+PFL=fedrep bash diag/submit_exp1.sh arm   # 对照臂 fedrep（3）
+```
+
+| 阶段 | 格 | seed | run | 本地 batch |
+|---|---|---|---|---|
+| 十字扫描 `1` | 13 | 5 | 65 | 1,560,000 |
+| 塌陷角 `corner` | 6 | 5 | 30 | 720,000 |
+| 对照臂 `arm` ×2 | 1+1 | 3 | 6 | 144,000 |
+| **Stage D 合计** | | | **101** | **2,424,000** |
+
+- **一个 array task = 一个 run**（`exp1_array.sbatch`）。顺序跑装不下 101 个
+  小时量级的 run，也没有断点续跑。默认并发上限 8，`--max-parallel N` 可调。
+- 清单由提交器**一次性**生成并落盘到 `results/lists/`，array 按行号取 ——
+  现生成的话 `--skip-existing` 一变行号就错位。
+- 提交器用 **`$PY_NOGPU`**（不带 `--nv` 的同一容器）：生成清单在登录节点跑，
+  那里没有 NVIDIA 驱动。
+- `corner` 与 `arm` **不含在 `--stage all` 里**，按需单独提交。
+
 ## 5. 正式实验 1/1B（最近一次交付，代码就绪，等集群跑）
 
 - 设定：**40 客户端 / ResNet-10 / 200 轮 / 2 seed**（`config.yaml` 的 `exp1` 段）。

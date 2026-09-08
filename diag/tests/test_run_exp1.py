@@ -302,3 +302,101 @@ def test_cost_stays_a_single_number_for_the_uniform_main_grid():
     assert cost["rounds_per_run"] == int(cfg.exp1.total_round)
     assert cost["local_steps_per_run"] == int(cfg.exp1.local_steps)
     assert isinstance(cost["local_batches_per_run"], int)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Stage D 主力重跑：corner / arm / --list-only
+# ══════════════════════════════════════════════════════════════════════════
+
+def _cfg():
+    from diag.config import load_config
+    return load_config("diag/config.yaml")
+
+
+def test_rho_grid_covers_the_points_the_supervisor_asked_for():
+    """导师第 4 条点名要 0 / 0.3 / 0.7 / 0.9。ρ=0 是**无攻击对照** ——
+    报告一直引用「no-attack baseline ASR」却从没进过 grid。"""
+    rates = [float(r) for r in _cfg().exp1.poison_rates]
+    for want in (0.0, 0.3, 0.7, 0.9):
+        assert want in rates, f"ρ grid 缺 {want}：{rates}"
+    assert 0.0 in rates and 1.0 in rates, "两个端点都要有"
+
+
+def test_cross_sweep_size_is_exact():
+    """8 个 ρ + 6 个 Nm − 1 个共用交叉点 = 13 格。
+    交叉点重复会在并表时变成两个"独立"观测。"""
+    from diag.run_exp1 import build_commands
+    cfg = _cfg()
+    jobs = build_commands(cfg, "1", seeds=[0])
+    assert len(jobs) == 13, f"十字扫描应为 13 格，实际 {len(jobs)}"
+    assert len({j["tag"] for j in jobs}) == 13, "有重复格子"
+
+
+def test_corner_skips_cells_already_in_the_cross():
+    """塌陷角与十字在 Nm=bad_num_fixed 那一列重叠，必须跳过。"""
+    from diag.run_exp1 import build_commands
+    cfg = _cfg()
+    corner = build_commands(cfg, "corner", seeds=[0])
+    cross = {j["tag"] for j in build_commands(cfg, "1", seeds=[0])}
+    assert not ({j["tag"] for j in corner} & cross), "塌陷角与十字有重叠格子"
+    n_bad = len([b for b in cfg.exp1.main.collapse_corner.bad_nums
+                 if int(b) != int(cfg.exp1.bad_num_fixed)])
+    n_rate = len(cfg.exp1.main.collapse_corner.poison_rates)
+    assert len(corner) == n_bad * n_rate, f"塌陷角格数不对：{len(corner)}"
+
+
+def test_control_arm_is_a_single_cell_per_arm():
+    """对照臂只在十字交叉点上 —— 换的是 PFL 框架，不是剂量。"""
+    from diag.run_exp1 import build_commands
+    cfg = _cfg()
+    for arm in ("fedbn", "fedrep"):
+        jobs = build_commands(cfg, "arm", seeds=[0, 1, 2], pfl=arm)
+        assert len(jobs) == 3, f"{arm}: 应为 3 个 seed × 1 格"
+        doses = {(_arg(j["cmd"], "--bad-client-num"),
+                  _arg(j["cmd"], "--poison-rate")) for j in jobs}
+        assert len(doses) == 1, f"{arm}: 剂量不唯一 {doses}"
+
+
+def test_the_two_arms_do_not_share_tags():
+    from diag.run_exp1 import build_commands
+    cfg = _cfg()
+    bn = {j["tag"] for j in build_commands(cfg, "arm", seeds=[0, 1, 2])}
+    rep = {j["tag"] for j in build_commands(cfg, "arm", seeds=[0, 1, 2],
+                                            pfl="fedrep")}
+    assert bn and rep and not (bn & rep)
+
+
+def test_corner_and_arm_are_not_in_stage_all():
+    """它们是按需单独提交的补丁，混进 all 会让「跑一遍 all」变成 100+ 个 run。"""
+    from diag.run_exp1 import build_commands
+    stages = {j["stage"] for j in build_commands(_cfg(), "all", seeds=[0])}
+    assert "corner" not in stages and "arm" not in stages
+
+
+def test_list_only_prints_one_clean_command_per_line():
+    """job array 靠 `sed -n "${SLURM_ARRAY_TASK_ID}p"` 取行 ——
+    stdout 里混进一个字（表头、注释、SKIP 标记）就整体错位。"""
+    import contextlib, io
+    from diag.run_exp1 import main
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = main(["--stage", "corner", "--seeds", "0", "--list-only"])
+    assert rc == 0
+    lines = [ln for ln in out.getvalue().splitlines() if ln]
+    assert lines, "stdout 一行都没有"
+    for ln in lines:
+        assert ln.startswith("python -m diag.run_fl "), f"不是干净的命令行：{ln!r}"
+        assert "#" not in ln and "SKIP" not in ln, f"混进了注释/标记：{ln!r}"
+    # 说明性输出必须去 stderr
+    assert "实验 1" in err.getvalue(), "表头没有走 stderr"
+    assert "实验 1" not in out.getvalue(), "表头污染了 stdout"
+
+
+def test_list_only_and_execute_are_mutually_exclusive():
+    from diag.run_exp1 import main
+    try:
+        main(["--stage", "corner", "--seeds", "0", "--list-only", "--execute"])
+    except SystemExit as e:          # argparse.error -> SystemExit(2)
+        assert e.code == 2
+        return
+    raise AssertionError("--list-only 与 --execute 同时给应当报错")
