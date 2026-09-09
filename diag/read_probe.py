@@ -21,6 +21,9 @@ import math
 import re
 from pathlib import Path
 
+# 成本模型与标定共用同一套（单位成本 + 外推），否则两张表的 GPU-秒不可对读。
+from diag.read_calibration import cost_model, project_run
+
 TAG_RE = re.compile(r"_probe_(?P<name>[A-Z]\d?)_(?P<arm>fedbn|fedrep)_s(?P<steps>\d+)\.csv$")
 
 
@@ -64,6 +67,10 @@ def main(argv=None) -> int:
     ap.add_argument("--results-dir", default="results/raw")
     ap.add_argument("--tail", type=int, default=3, help="末 N 个评估点取均值")
     ap.add_argument("--mta-col", default="mta_personalized")
+    ap.add_argument("--main-rounds", type=int, default=300,
+                    help="T_main 外推用的主力轮数（exp1.total_round）")
+    ap.add_argument("--main-eval-every", type=int, default=5,
+                    help="T_main 外推用的主力评估间隔（exp1.eval_every）")
     ap.add_argument("--asr-col", default="asr_paper_benign",
                     help="默认 unfiltered（论文口径），才能与 HANDOFF.md:325 对读")
     args = ap.parse_args(argv)
@@ -78,7 +85,7 @@ def main(argv=None) -> int:
     print(f"[probe] 锚点：上游 main.py 论文配置复现 = 0.9195（论文报 0.8222）\n")
     hdr = (f"{'格':>4} {'arm':>7} {'总步':>5} {'轮':>5} {'点':>4} "
            f"{'MTA_pb':>8} {'ASR':>8} {'MTA_sh':>8} {'ASR_sh':>8} "
-           f"{'ACC_loc':>8} {'ACCloc_sh':>10}  说明")
+           f"{'ACC_loc':>8} {'ACCloc_sh':>10} {'s/round':>8} {'T_main_h':>9}  说明")
     print(hdr); print("-" * (len(hdr) + 20))
     NOTE = {"A": "锚点：论文配置 + fedbn",
             "B1": "现状 1:1（default_head_steps）",
@@ -86,6 +93,9 @@ def main(argv=None) -> int:
             "B3": "10:1，表示=1 epoch（FedRep 原文）"}
     for c in cells:
         rounds = [int(r["round"]) for r in c["rows"] if r.get("round")]
+        # 单位成本 → T_main 外推。**这是零机时的**：数就在已经跑完的 CSV 里。
+        cm = cost_model(c["rows"])
+        t_main = project_run(cm, args.main_rounds, args.main_eval_every)
         print(f"{c['name']:>4} {c['arm']:>7} {c['steps']:>5} "
               f"{(max(rounds) if rounds else 0):>5} {len(c['rows']):>4} "
               f"{_fmt(tail_mean(c['rows'], args.mta_col, args.tail)):>8} "
@@ -93,7 +103,9 @@ def main(argv=None) -> int:
               f"{_fmt(tail_mean(c['rows'], 'mta_personalized_shared', args.tail)):>8} "
               f"{_fmt(tail_mean(c['rows'], 'asr_paper_shared_benign', args.tail)):>8} "
               f"{_fmt(tail_mean(c['rows'], 'acc_local_personalized', args.tail)):>8} "
-              f"{_fmt(tail_mean(c['rows'], 'acc_local_personalized_shared', args.tail)):>10}  "
+              f"{_fmt(tail_mean(c['rows'], 'acc_local_personalized_shared', args.tail)):>10} "
+              f"{_fmt(cm['s_per_round'], '{:.2f}'):>8} "
+              f"{('n/a' if t_main is None else f'{t_main / 3600:.2f}'):>9}  "
               f"{NOTE.get(c['name'], '')}")
 
     print("\n判读：")
@@ -108,6 +120,8 @@ def main(argv=None) -> int:
     print("    → 若 MTA_sh 显著高于 MTA，说明此前的低 MTA/低 ASR 是**评估口径伪影**，")
     print("      不是 FedRep 真的压住了后门。B1/B2/B3 的 MTA_sh 排序才是头:表示比的答案。")
     print("  _sh 两列**仅 FedRep 臂有值**；fedbn 臂全 n/a（全局 BN 停在初始化值）。")
+    print(f"  s/round / T_main_h = 单位成本与外推（{args.main_rounds} 轮 / "
+          f"eval_every={args.main_eval_every}）。**零机时**：数就在已跑完的 CSV 里。")
     print("  n/a = 该列无定义或没量到，不是 0。")
     return 0
 

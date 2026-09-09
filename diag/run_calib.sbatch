@@ -28,7 +28,7 @@ set -uo pipefail
 SEEDS="${1:-0 1}"
 # 标定必须跑**主力要用的那条臂**，否则标出来的成本不适用。
 # 默认 fedrep（Exp 1 与 Exp 3 对齐）；PFL=fedbn 可换。
-PFL="${PFL:-fedrep}"
+PFL="${PFL:-fedbn}"   # 2026-09-09：Exp 1 走已验证的 FedBN 通路（见 config.yaml exp1 注释）
 
 ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 # shellcheck source=diag/cluster_env.sh

@@ -337,6 +337,65 @@ PFL=fedrep bash diag/submit_exp1.sh arm   # 对照臂 fedrep（3）
 默认用 `asr_paper_all`（缺列回退旧列并告警）。**perturb 路径只留给实验 E**。
 exp1 需**重跑**才有论文口径列（旧 CSV 无 `asr_paper_*`）。
 
+## 5c. 2026-09-09 定案：Exp 1 走 **FedBN + 论文配置**；FedRep 通路**暂停**
+
+### 决定
+
+`exp1` 回到上游 `main.py` 的默认（`diag/config.yaml` 的 `exp1` 注释里有完整理由）：
+
+| | 值 | 出处 |
+|---|---|---|
+| `client_num` | **100** | `main.py:26` |
+| `select_per_round` | **10**（参与率 10%） | `main.py:28` |
+| `total_round` | **300** | `main.py:23` |
+| `local_steps` | **15 = 1 个 local epoch**（500 张 / 32，drop_last） | `main.py:32` |
+| `pfl` | **fedbn** | `main.py:34`，且 `main.py:110` 只实现了这一个 |
+
+**判据**：探针 A 在这套配置下跑出 **ASR 0.8201**，论文报 0.8222，本仓库用原始
+`main.py` 复现出 0.9195（§5b）。**这是唯一被端到端验证过的通路。**
+
+> **报告 §2 的「1 local epoch」是对的。** 此前算出「0.38 epoch」，是因为我们
+> 自己把 `client_num` 改成了 40（每端 1250 张 → 1 epoch = 39 步）。
+> 导师意见 #5 的「3–5 epoch」在 100 端下就是 **45 / 75 步**。
+
+**代价（必须写进报告的方法学限制，不要藏）**：Exp 1 = FedBN、Exp 3 = hier_fedrep，
+两库落在不同的 PFL 方法上 —— FedBN 个性化**归一化**，FedRep 个性化**分类头**。
+两边的 ASR 绝对值**不可同框**，只能各自内部比较。
+
+**剂量轴含义变了**：`Nm ∈ {1,2,4,8,16,32}` 在 100 端下是 **1%–32%**（此前 40 端是
+2.5%–80%），论文自己的点（10 = 10%）落在网格里。
+
+### FedRep 通路：查到了什么、还剩什么没解释
+
+`diag/pfl_fedrep.py` 与 `--pfl fedrep` **保留未删**。三轮探针（每轮约 3 GPU-h）
+查出并修好了四个缺陷，但 **FedRep 臂的准确率始终追不上 FedBN，原因未定**。
+
+已修（都留在代码里，且各有守卫）：
+
+| # | 缺陷 | 守卫 |
+|---|---|---|
+| 1 | 评估用 `[漂移后的 φ′, 阶段1 的头]`，头/骨干失配。FedRep 的个性化模型是 `[共享表示, 私有头]` | `merge_shared_and_private` + `test_merge_*` |
+| 2 | `_fedrep_set_phase` 用 `m.eval()` 冻 BN，被 `client.py:local_update` **每步**的 `.train()` 撤销 → 头阶段 BN running stats 一直在更新并上传 | `test_norm_freeze_uses_track_running_stats_not_eval_mode` |
+| 3 | `_FakeBaseClient.local_update` 漏了 `.train()` → 缺陷 2 在本地全绿（**假绿**） | `test_the_fake_base_client_replicates_the_real_local_update` |
+| 4 | `acc_local_*` 用了 `utils.evaluate_accuracy` 的**百分数**没换算，比邻列大 100 倍 | `test_per_client_accuracy_is_a_fraction_not_a_percentage` |
+
+顺带确立的一件事（**对 FedBN 一样重要**）：`mta_personalized` 测在
+`self.probe`（共享的**类别均衡**探针），而 `asr_paper_*` 测在客户端**自己的**
+test loader —— 两个数字不在同一个 population（tf-dpfl 陷阱 #11 的同一类错误）。
+新增的 `acc_local_personalized` 与 ASR 同 population，也与 tf-dpfl 的 `pm_acc` 同口径。
+
+**仍未解释**：修完这四条之后，FedRep 臂在**逐客户端分片**上的准确率仍低于 FedBN。
+缺陷 2 的修复把 ASR 从 0.066 抬到 0.111（unfiltered，同 seed 同配置），
+方向明确但量级不足以解释准确率的差。
+
+**下一个该查的**（还没查）：**私有头在轮次之间到底有没有被保住**。
+`use_fedrep` 的 `fedrep_distribute` 把 `linear.*` 从下发字典里 pop 掉，配
+`server.py:32` 的 `load_state_dict(..., strict=False)`，理论上客户端保留自己的头 ——
+但**这条路径从来没有被端到端验证过**：`evidence_fedrep` 验的是**全局模型**的
+`linear.*` 不动，那与「客户端的头没被覆盖」是两回事。
+验法：在 `receive_model` 前后各存一次客户端的 `linear.weight`，断言逐位相同。
+这条**不需要 GPU 上的完整 run**，一个几轮的 smoke 就够。
+
 ## 6. 待办 / 未决
 
 - [ ] **最优先**：真实数据上跑 `analysis_exposure`（步骤 0），看 E 是否坍缩成一条曲线。
