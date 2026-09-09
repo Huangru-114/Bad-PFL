@@ -319,3 +319,84 @@ def test_unconfigured_client_falls_back_and_warns():
     assert not torch.equal(before["conv1.weight"], after["conv1.weight"])
     assert not torch.equal(before["linear.weight"], after["linear.weight"]), \
         "未配置时应当头与 backbone 一起训（普通单阶段）"
+
+
+# ── [当前共享表示, 私有头] 的拼装（2026-09-09 探针逼出来的）──────────────────
+def test_merge_takes_the_head_from_private_and_the_rest_from_shared():
+    """FedRep 定义的个性化模型 = 共享表示 + 私有头。
+
+    评估时 `client.local_model` 是 [阶段 2 漂移过的 φ′, 阶段 1 对着 φ_t 训的 h]，
+    头和骨干不配套 —— 探针实测 fedrep 三档 MTA(0.3966/0.5334/0.4874) 全部低于
+    fedbn(0.6412)，且 10:1 比 5:1 更差。漂移后的 φ′ 只是**上传物**。
+    """
+    from diag.pfl_fedrep import merge_shared_and_private
+    shared = {"conv1.weight": "S_conv", "bn1.weight": "S_bn",
+              "linear.weight": "S_head_w", "linear.bias": "S_head_b"}
+    private = {"conv1.weight": "P_conv", "bn1.weight": "P_bn",
+               "linear.weight": "P_head_w", "linear.bias": "P_head_b"}
+    merged = merge_shared_and_private(shared, private)
+    assert merged["linear.weight"] == "P_head_w"   # 头：私有
+    assert merged["linear.bias"] == "P_head_b"
+    assert merged["conv1.weight"] == "S_conv"      # 表示：共享
+    assert merged["bn1.weight"] == "S_bn", "FedRep 下 BN 参与聚合，属于共享表示"
+
+
+def test_merge_is_neither_of_its_two_inputs():
+    """反向锚点：拼出来的既不是纯共享也不是纯私有 —— 否则这个函数没干活。"""
+    from diag.pfl_fedrep import merge_shared_and_private
+    shared = {"conv1.weight": "S", "linear.weight": "S"}
+    private = {"conv1.weight": "P", "linear.weight": "P"}
+    merged = merge_shared_and_private(shared, private)
+    assert merged != shared and merged != private
+    assert merged == {"conv1.weight": "S", "linear.weight": "P"}
+
+
+def test_merge_raises_when_the_private_head_is_missing():
+    """缺私有头就报错，不静默回退到共享头 —— 那样就不是 FedRep 了。"""
+    from diag.pfl_fedrep import merge_shared_and_private
+    try:
+        merge_shared_and_private({"linear.weight": "S"}, {})
+    except KeyError:
+        return
+    raise AssertionError("private 缺 linear.weight 时应当 KeyError")
+
+
+def test_key_set_follows_shared_so_load_state_dict_can_be_strict():
+    from diag.pfl_fedrep import merge_shared_and_private
+    shared = {"conv1.weight": 1, "linear.weight": 2}
+    private = {"conv1.weight": 9, "linear.weight": 8, "extra.buf": 7}
+    assert set(merge_shared_and_private(shared, private)) == set(shared)
+
+
+# ── track.py 侧的接线（源码断言：本机没有 torch，跑不了 _evaluate_now）────────
+def _track_src() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "track.py").read_text(encoding="utf-8")
+
+
+def test_the_three_shared_columns_are_registered():
+    """列没登记 = 落盘时被丢掉，而 run 一切正常 —— 事后才发现白跑。"""
+    src = _track_src()
+    for col in ("mta_personalized_shared", "asr_paper_shared_benign",
+                "asr_paper_filtered_shared_benign"):
+        assert src.count(f'"{col}"') >= 2, \
+            f"{col} 要既登记进列表、又出现在落行处（现出现 {src.count(chr(34)+col+chr(34))} 次）"
+
+
+def test_the_parallel_measurement_does_not_replace_the_original_column():
+    """**铁律 #2**：并排量一遍，不是把 mta_personalized 改成新口径。
+
+    哪种组合才是 FedRep 的个性化模型要由数据判。悄悄换掉口径会让这一批
+    与此前所有 exp1 结果不可比，而且从 CSV 上完全看不出来。
+    """
+    src = _track_src()
+    assert '"mta_personalized": _mean("mta")' in src, \
+        "原来的 mta_personalized 被改了 —— 那不是并排测量，是换口径"
+
+
+def test_shared_pm_is_gated_on_the_fedrep_arm():
+    """FedBN 臂的全局 BN 停在初始化值（README §4b），拼出来不是可用模型。
+    非 FedRep 客户端必须返回 None → 列留 nan，不是 0（铁律 #5）。"""
+    src = _track_src()
+    assert 'hasattr(client, "_fedrep_head_steps")' in src
+    assert "return None" in src.split("def _fedrep_shared_pm")[1].split("def ")[0]

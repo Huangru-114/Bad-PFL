@@ -104,6 +104,11 @@ IMPLANTATION_COLUMNS = [
     "asr_paper_frozen_all",
     # 主任务：mta 是全部样本上的准确率，acc_* 是非目标类样本上的（≠ mta）
     "mta_personalized", "mta_global",
+    # FedRep 定义的个性化模型 = [当前共享表示, 私有头]（见 _fedrep_shared_pm）。
+    # 与上面那一列**并排**量，不替换它：哪种组合才对由数据判，不是改口径宣布。
+    # **仅 FedRep 臂有值**，fedbn / 无 pfl 的 run 全是 nan（不是 0，铁律 #5）。
+    "mta_personalized_shared", "asr_paper_shared_benign",
+    "asr_paper_filtered_shared_benign",
     "clean_loss_personalized", "clean_loss_global",
     "acc_target_class_personalized", "acc_target_class_global",
     "mask_keep_ratio", "effective_trim_n", "zero_sign_ratio",
@@ -489,6 +494,55 @@ class TrainingTracker:
         return {int(c.cid): self._paper_asr_frozen(c.local_model, int(c.cid))
                 for c in both}
 
+    def _fedrep_shared_pm(self, server: Any, client: Any):
+        """FedRep 定义的个性化模型：**[当前共享表示 φ, 该客户端的私有头 h]**。
+
+        # 为什么需要它（2026-09-09，探针 B1/B2/B3 逼出来的）
+
+        上游一轮的顺序是：``distribute_model()`` → 客户端 ``local_update()`` ×
+        local_steps → ``agg_and_update()`` → ``on_round_end``（**评估在这里**）。
+        于是 ``client.local_model`` 在评估时是 **[阶段 2 漂移过的 φ′, 阶段 1 针对
+        φ_t 训出来的 h]** —— 头和骨干**不配套**。
+
+        FedBN 臂没有这个问题：它的 15 步**同时**训头和骨干，两者共适应。
+        FedRep 臂的头是对着**收到的** φ_t 拟合的，之后骨干被移走了。
+        实测征兆（100/10/300 轮/ρ=0.2 的探针）：
+
+            fedbn  15 步          MTA 0.6412
+            fedrep 15 步  (1:1)   MTA 0.3966
+            fedrep 90 步  (5:1)   MTA 0.5334
+            fedrep 165 步 (10:1)  MTA 0.4874   ← 比 5:1 还低
+
+        三个 fedrep 全部低于 fedbn，**尽管 B2/B3 的骨干拿到的步数与 fedbn 一样多、
+        头还额外多拿 75/150 步**；而且头训得越久反而越差 —— 头对 φ_t 拟合得越紧，
+        骨干一动惩罚越大。这两件只有「失配」解释得通。
+
+        FedRep 里漂移后的 φ′ **只是上传物**，不是个性化模型。tf-dpfl 侧一直是
+        对的（``client/hier_fedrep.py``：``pm_weights = [w.copy() for w in
+        self.edge_weights]``，用**收到的** backbone）。
+
+        # 为什么用 server.global_model 而不是缓存收到的 φ_t
+
+        评估在聚合之后，``server.global_model`` 就是当前的共享表示 φ_{t+1}；
+        缓存 φ_t 要给 100 个客户端各存一份 backbone（约 20 MB × 100）。
+        两者只差一个聚合步，而 φ′ 是**朝着该客户端自己的少数类**漂移的，
+        差距不是一个量级。
+
+        **只在 FedRep 臂上有定义**：FedBN 臂的全局 BN 停在初始化值（README §4b），
+        拼出来的不是可用模型 → 返回 None，对应的列留 nan 而不是 0（铁律 #5）。
+        """
+        if not hasattr(client, "_fedrep_head_steps"):
+            return None
+        from diag.pfl_fedrep import merge_shared_and_private
+
+        merged = merge_shared_and_private(server.global_model.state_dict(),
+                                          client.local_model.state_dict())
+        model = get_resnet(size=self.model_size, num_classes=self.num_classes)
+        model.load_state_dict(merged, strict=True)
+        model.to(self.device)
+        model.device = self.device
+        return model
+
     def _evaluate_model(self, model: Any) -> Dict[str, float]:
         from .exp_e import _metrics, _predict, evaluate_mode
 
@@ -555,6 +609,21 @@ class TrainingTracker:
 
         # --- 个性化模型 ---
         rows = [self._evaluate_model(client.local_model) for client in eval_clients]
+
+        # --- 并行的第二种组合：[当前共享表示, 私有头]（见 _fedrep_shared_pm）---
+        #   **不替换上面那一列**，而是并排量一遍：哪种组合才是 FedRep 的个性化模型
+        #   要由数据判，不是由我改个口径就宣布对了（铁律 #2）。
+        #   非 FedRep 臂上 _fedrep_shared_pm 返回 None → 整组留空。
+        shared_rows, shared_paper, shared_paper_filtered = [], {}, {}
+        for client in eval_clients:
+            pm = self._fedrep_shared_pm(server, client)
+            if pm is None:
+                continue
+            shared_rows.append(self._evaluate_model(pm))
+            u, f = self._paper_asr(pm, getattr(client, "test_dataloader", None))
+            shared_paper[int(client.cid)] = u
+            shared_paper_filtered[int(client.cid)] = f
+            del pm
         selected_ids = {int(clients[i].cid) for i in self.selected_indices}
         participated = sum(1 for c in eval_clients if int(c.cid) in selected_ids)
 
@@ -608,6 +677,16 @@ class TrainingTracker:
         asr_paper_filtered_malicious = _mean_over(paper_filtered_by_cid, malicious_cids)
         asr_paper_filtered_all = _mean_over(paper_filtered_by_cid,
                                             benign_cids + malicious_cids)
+
+        # [当前共享表示, 私有头] 这一组合下的同一批指标（仅 FedRep 臂）
+        def _mean_shared(key: str) -> float:
+            values = [r[key] for r in shared_rows if np.isfinite(r[key])]
+            return float(np.mean(values)) if values else float("nan")
+
+        mta_shared = _mean_shared("mta")
+        asr_paper_shared_benign = _mean_over(shared_paper, benign_cids)
+        asr_paper_filtered_shared_benign = _mean_over(shared_paper_filtered,
+                                                      benign_cids)
 
         # --- B 线：冻结触发器 ASR（停攻点快照后才有值） ---
         frozen_by_cid = self._maybe_frozen_asr(eval_clients, malicious_clients)
@@ -676,6 +755,9 @@ class TrainingTracker:
             # 非目标类样本上的（与 ASR 的分母同口径）—— 两者不是同一个数。
             "mta_personalized": _mean("mta"),
             "mta_global": global_row["mta"],
+            "mta_personalized_shared": mta_shared,
+            "asr_paper_shared_benign": asr_paper_shared_benign,
+            "asr_paper_filtered_shared_benign": asr_paper_filtered_shared_benign,
             "clean_loss_personalized": _mean("clean_loss"),
             "clean_loss_global": global_row["clean_loss"],
             "acc_target_class_personalized": _mean("acc_target_class"),

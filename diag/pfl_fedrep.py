@@ -127,6 +127,20 @@ def default_head_steps(local_steps: int) -> int:
 # 服务器侧：与 pfl.py::use_fedbn 同构
 # ──────────────────────────────────────────────────────────────────────────
 
+def merge_shared_and_private(shared: Dict[str, "torch.Tensor"],
+                             private: Dict[str, "torch.Tensor"]) -> Dict[str, "torch.Tensor"]:
+    """拼出 FedRep 定义的个性化模型：**私有键取 private，其余取 shared**。
+
+    抽成纯字典操作是为了能在**没有 torch 的机器上**跑 L1 —— 拼错一个键不会报错，
+    只会让评估悄悄测在错的模型上（这正是 2026-09-09 探针暴露的那类问题）。
+
+    键集合以 ``shared`` 为准：私有键在 private 里必须存在，缺了直接 KeyError
+    而不是静默回退到 shared（回退等于把私有头换成聚合过的头，那就不是 FedRep 了）。
+    """
+    return {k: (private[k] if is_fedrep_private_key(k) else v)
+            for k, v in shared.items()}
+
+
 def use_fedrep(server) -> None:
     """把分类头从聚合与下发中剔除。
 
