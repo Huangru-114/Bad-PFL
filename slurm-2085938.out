@@ -1,0 +1,701 @@
+  PASS  test_pfl_fedrep::test_batchnorm_is_shared_not_private
+  PASS  test_pfl_fedrep::test_body_phase_leaves_head_unchanged
+  PASS  test_pfl_fedrep::test_head_and_body_partition_is_exhaustive_and_disjoint
+  PASS  test_pfl_fedrep::test_head_is_removed_from_aggregation
+  PASS  test_pfl_fedrep::test_head_is_removed_from_distribution
+  PASS  test_pfl_fedrep::test_head_phase_leaves_backbone_bitwise_unchanged
+  PASS  test_pfl_fedrep::test_head_steps_matches_the_one_to_one_convention
+  PASS  test_pfl_fedrep::test_head_steps_split_leaves_work_for_both_phases
+  PASS  test_pfl_fedrep::test_mro_composes_rather_than_replaces
+  PASS  test_pfl_fedrep::test_only_the_classifier_head_is_private
+  PASS  test_pfl_fedrep::test_phase_counter_resets_every_round
+  PASS  test_pfl_fedrep::test_substring_rule_does_not_overmatch
+[FedRep] ⚠️ 未调用 configure_fedrep()，本客户端退化为普通单阶段训练（头与 backbone 一起训）。检查 run_fl.py 的接线。
+  PASS  test_pfl_fedrep::test_unconfigured_client_falls_back_and_warns
+  PASS  test_pfl_fedrep::test_upload_restores_requires_grad
+  PASS  test_pfl_fedrep::test_use_fedrep_registers_on_the_same_two_hooks_as_use_fedbn
+
+15 passed, 0 failed in 10.36s
+  PASS  test_paper_asr_filtered::test_all_samples_are_target_class_gives_nan_not_zero
+  PASS  test_paper_asr_filtered::test_every_declared_column_is_actually_written
+  PASS  test_paper_asr_filtered::test_filtered_and_unfiltered_match_hand_computed_values
+  PASS  test_paper_asr_filtered::test_filtered_columns_are_declared
+  PASS  test_paper_asr_filtered::test_filtered_denominator_excludes_the_target_class
+  PASS  test_paper_asr_filtered::test_model_training_mode_is_restored
+  PASS  test_paper_asr_filtered::test_paper_asr_returns_both_conventions
+  PASS  test_paper_asr_filtered::test_unfiltered_columns_are_untouched
+  PASS  test_paper_asr_filtered::test_unfiltered_is_bit_identical_to_the_old_behaviour
+
+9 passed, 0 failed in 2.34s
+  PASS  test_run_exp1::test_csv_has_paper_column_false_when_missing_file
+  PASS  test_run_exp1::test_csv_has_paper_column_ignores_substring_false_positives
+  PASS  test_run_exp1::test_csv_has_paper_column_true_only_when_column_present
+  PASS  test_run_exp1::test_fedbn_tags_are_unchanged_so_old_runs_still_resume
+  PASS  test_run_exp1::test_implantation_csv_matches_run_fl_naming
+  PASS  test_run_exp1::test_pfl_arm_is_passed_to_run_fl
+  PASS  test_run_exp1::test_the_two_arms_never_share_a_run_tag
+  PASS  test_run_exp1::test_unknown_pfl_arm_is_rejected_early
+
+8 passed, 0 failed in 2.13s
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+  PASS  test_nan_safety::test_analysis_helpers_are_nan_safe
+  PASS  test_nan_safety::test_class_prototypes_all_nan_labels_bucket
+  PASS  test_nan_safety::test_knn_overlap_nan_on_empty_inputs
+  PASS  test_nan_safety::test_margin_matrix_all_nan_prototypes_does_not_crash
+  PASS  test_nan_safety::test_nan_cv_normal_case
+  PASS  test_nan_safety::test_nan_cv_zero_mean_returns_nan_not_inf
+  PASS  test_nan_safety::test_nan_to_num_count
+  PASS  test_nan_safety::test_nanmad_zero_for_constant_input
+  PASS  test_nan_safety::test_nanmean_skips_nan
+  PASS  test_nan_safety::test_nanmedian_and_nanmad_skip_nan
+  PASS  test_nan_safety::test_nanstd_along_dim_with_ragged_nan
+  PASS  test_nan_safety::test_nanstd_insufficient_samples_returns_nan
+  PASS  test_nan_safety::test_nanstd_matches_numpy_on_clean_input
+  PASS  test_nan_safety::test_nanstd_skips_nan
+  PASS  test_nan_safety::test_no_function_returns_inf_on_degenerate_input
+  PASS  test_nan_safety::test_observable_score_constant_margins_gives_nan_not_inf
+  PASS  test_nan_safety::test_observable_score_with_partially_nan_matrices
+  PASS  test_features::test_class_prototypes_respects_min_class_count
+  PASS  test_features::test_class_prototypes_shapes_and_empty_class_is_nan
+  PASS  test_features::test_extract_penultimate_forces_eval_and_restores_mode
+  PASS  test_features::test_extract_penultimate_shapes_and_meta
+  PASS  test_features::test_find_last_linear_picks_classifier_head
+  PASS  test_features::test_fisher_dispersion_degenerate_denominator_is_nan
+  PASS  test_features::test_fisher_dispersion_nan_propagation
+  PASS  test_features::test_knn_overlap_empty_ref_returns_nan
+  PASS  test_features::test_knn_overlap_k_larger_than_bank_degrades_gracefully
+  PASS  test_features::test_knn_overlap_perfect_and_zero_overlap
+  PASS  test_features::test_margin_matrix_diagonal_is_nan_and_shape
+  PASS  test_features::test_margin_matrix_nan_row_for_invalid_prototype
+  PASS  test_features::test_margin_matrix_sign_matches_geometry
+  PASS  test_perturb::test_all_modes_preserve_shape_and_pixel_range
+  PASS  test_perturb::test_clamp_flag_reproduces_the_original_unclamped_composition
+  PASS  test_perturb::test_clean_mode_is_identity
+  FAIL  test_perturb::test_clip_diagnostics_is_all_zero_when_nothing_is_clipped
+  FAIL  test_perturb::test_clip_diagnostics_quantifies_what_the_clamp_removed
+  PASS  test_perturb::test_delta_linf_within_budget
+  PASS  test_perturb::test_delta_plus_xi_budget_is_sum
+  PASS  test_perturb::test_delta_shape_mismatch_raises
+  PASS  test_perturb::test_missing_components_raise_clearly
+  PASS  test_perturb::test_random_noise_linf_equals_eps
+  PASS  test_perturb::test_unknown_mode_raises
+  PASS  test_perturb::test_xi_fn_does_not_leave_gradients_on_model
+  PASS  test_perturb::test_xi_fn_is_reproducible_with_fixed_seed
+  PASS  test_perturb::test_xi_fn_restores_model_training_mode
+  PASS  test_perturb::test_xi_linf_within_budget
+  PASS  test_metrics::test_baseline_signals_columns_and_ordering
+  PASS  test_metrics::test_baseline_signals_empty_input
+  PASS  test_metrics::test_observable_score_all_nan_client_is_nan
+  PASS  test_metrics::test_observable_score_empty_input
+  PASS  test_metrics::test_observable_score_flags_depressed_column
+  PASS  test_metrics::test_observable_score_low_on_random_matrices
+  PASS  test_metrics::test_observable_score_shape_and_dtype
+  PASS  test_metrics::test_observable_score_signature_excludes_privileged_inputs
+  PASS  test_metrics::test_observable_score_uniform_depression_beats_noisy_depression
+  PASS  test_probe::test_assert_disjoint_detects_overlap
+  PASS  test_probe::test_build_probe_set_does_not_disturb_global_numpy_rng
+  PASS  test_probe::test_different_seed_gives_different_indices
+  PASS  test_probe::test_get_targets_returns_int_array
+  PASS  test_probe::test_insufficient_samples_raises_clearly
+  PASS  test_probe::test_loaders_cover_every_sample
+  PASS  test_probe::test_missing_target_class_raises
+  PASS  test_probe::test_other_is_class_balanced
+  PASS  test_probe::test_query_and_other_contain_no_target_class
+  PASS  test_probe::test_ref_and_target_are_all_target_class
+  PASS  test_probe::test_same_seed_gives_identical_indices
+  PASS  test_probe::test_subset_sizes_match_config
+  PASS  test_probe::test_subsets_are_pairwise_disjoint
+  PASS  test_eval_loader::test_contrast_with_original_training_loader_behaviour
+  PASS  test_eval_loader::test_drop_last_is_false
+  PASS  test_eval_loader::test_no_samples_dropped_when_not_divisible
+  PASS  test_eval_loader::test_shuffle_is_false_for_determinism
+  PASS  test_hooks::test_extract_generator_finds_real_generator
+  PASS  test_hooks::test_extract_generator_reports_actual_freevars_on_failure
+  PASS  test_hooks::test_flatten_state_dict_difference_mode
+  PASS  test_hooks::test_flatten_state_dict_skips_integer_buffers
+  PASS  test_hooks::test_generator_checkpoint_hook_disabled_when_interval_not_positive
+  PASS  test_hooks::test_generator_checkpoint_hook_fires_on_interval
+  PASS  test_hooks::test_generator_checkpoint_hook_tolerates_missing_generator
+  PASS  test_hooks::test_global_field_mismatch_is_caught
+  PASS  test_hooks::test_identical_partitions_pass
+  PASS  test_hooks::test_index_level_mismatch_is_caught_even_when_histogram_matches
+  PASS  test_hooks::test_label_histogram_mismatch_is_caught
+  PASS  test_hooks::test_legacy_meta_without_indices_still_compares
+  PASS  test_hooks::test_missing_client_is_caught
+  PASS  test_hooks::test_participation_difference_is_a_note_not_a_failure
+  PASS  test_hooks::test_partition_idx_mismatch_is_caught
+  PASS  test_hooks::test_poison_flags_are_allowed_to_differ
+  PASS  test_hooks::test_run_dir_name_format
+  PASS  test_hooks::test_sample_count_mismatch_is_caught
+  PASS  test_hooks::test_save_generator_meta_writes_required_keys
+  PASS  test_hooks::test_save_state_dict_is_detached_cpu_copy
+  PASS  test_hooks::test_state_dict_hash_ignores_integer_buffers
+  PASS  test_hooks::test_state_dict_hash_is_stable_and_sensitive
+  PASS  test_analysis::test_all_plots_produce_non_empty_files
+  PASS  test_analysis::test_auc_score_perfect_separation
+  PASS  test_analysis::test_auc_score_ties_give_half
+  PASS  test_analysis::test_mannwhitney_returns_pvalue
+  PASS  test_analysis::test_overlap_chance_level_is_the_ref_share_of_the_bank
+  PASS  test_analysis::test_pearson_spearman_perfect_correlation
+  PASS  test_analysis::test_plot_d1_accepts_explicit_poisoned_source_classes
+  PASS  test_analysis::test_signal_direction_map_covers_known_signals
+  PASS  test_analysis::test_summarize_c_and_d_shapes
+  PASS  test_analysis::test_summarize_c_applies_direction_and_records_raw
+  PASS  test_analysis::test_summarize_c_direction_declared_flag
+  PASS  test_analysis::test_summarize_missing_column_raises
+  PASS  test_analysis::test_summarize_ng_is_zero_for_real_group
+  PASS  test_analysis::test_summarize_shape_and_cv_definition
+  PASS  test_audit::test_assert_partition_matches_accepts_consistent_dataset
+  PASS  test_audit::test_assert_partition_matches_detects_content_mismatch
+  PASS  test_audit::test_assert_partition_matches_detects_out_of_range
+  PASS  test_audit::test_discover_runs_missing_root_returns_empty
+  PASS  test_audit::test_discover_runs_parses_and_ignores_junk
+  PASS  test_audit::test_fmt_escapes_pipes_and_newlines
+  PASS  test_audit::test_group_compare_detects_full_separation
+  PASS  test_audit::test_group_compare_detects_overlap
+  PASS  test_audit::test_group_compare_is_nan_safe
+  PASS  test_audit::test_leak_free_context_removes_gradients
+  PASS  test_audit::test_leak_free_context_restores_on_exception
+  PASS  test_audit::test_leak_free_context_restores_original_method
+  PASS  test_audit::test_md_table_empty_frame
+  PASS  test_audit::test_md_table_escapes_header_names
+  PASS  test_audit::test_md_table_preserves_column_dtypes
+  PASS  test_audit::test_md_table_stays_rectangular_with_pipes
+  PASS  test_audit::test_thresholds_are_documented_numbers
+  PASS  test_audit::test_unpatched_poison_client_leaks_gradients
+  PASS  test_audit::test_valid_class_count
+  PASS  test_audit::test_verdict_as_row_has_all_columns
+  PASS  test_exp_e::test_evaluate_mode_covers_all_seven_modes
+  PASS  test_exp_e::test_evaluate_mode_missing_component_raises
+  PASS  test_exp_e::test_evaluate_mode_random_modes_average_over_repeats
+  PASS  test_exp_e::test_evaluate_mode_real_target_has_nan_asr
+  PASS  test_exp_e::test_evaluate_mode_records_linf_budget
+  PASS  test_exp_e::test_evaluate_mode_restores_model_training_flag
+  PASS  test_exp_e::test_metrics_all_target_class_gives_nan_not_zero
+  PASS  test_exp_e::test_metrics_asr_and_error_rate_are_different_quantities
+  PASS  test_exp_e::test_metrics_error_rate_uses_same_denominator
+  PASS  test_exp_e::test_metrics_excludes_target_class_from_denominator
+  PASS  test_exp_e::test_oracle_training_actually_updates_generator
+  PASS  test_exp_e::test_oracle_training_does_not_modify_clean_model
+  PASS  test_exp_e::test_oracle_training_leaves_no_gradients_on_clean_model
+  PASS  test_exp_e::test_probe_does_not_disturb_global_numpy_rng
+  PASS  test_exp_e::test_probe_is_reproducible_and_right_size
+  PASS  test_exp_e::test_probe_rejects_oversized_n
+  PASS  test_exp_e::test_probe_target_subset_is_all_target_class
+  PASS  test_analysis_e::test_all_exp_e_labels_are_ascii_only
+  PASS  test_analysis_e::test_all_exp_e_plots_produce_non_empty_files
+  PASS  test_analysis_e::test_assert_no_cjk_catches_legend_and_ticks
+  PASS  test_analysis_e::test_assert_no_cjk_catches_title
+  PASS  test_analysis_e::test_assert_no_cjk_passes_on_english_figure
+  PASS  test_analysis_e::test_classify_floor_bands
+  PASS  test_analysis_e::test_classify_floor_handles_nan
+  PASS  test_analysis_e::test_classify_floor_reports_undefined_gaps_honestly
+  PASS  test_analysis_e::test_contains_cjk_detects_chinese_and_ignores_ascii
+  PASS  test_analysis_e::test_decomposition_delta_equals_e1_minus_e2
+  PASS  test_analysis_e::test_decomposition_reports_floor_fraction_and_verdict
+  PASS  test_analysis_e::test_plot_e1_handles_missing_cell
+  PASS  test_analysis_e::test_plots_reject_chinese_via_finish
+  PASS  test_analysis_e::test_summarize_e_keeps_real_target_asr_as_nan
+  PASS  test_analysis_e::test_summarize_e_missing_column_raises
+  PASS  test_analysis_e::test_summarize_e_shape_and_columns
+  PASS  test_analysis_e_noise::test_group_sizes_and_baselines_are_reported
+  PASS  test_analysis_e_noise::test_lift_is_nan_when_baseline_row_is_missing
+  PASS  test_analysis_e_noise::test_lift_is_paired_per_client_not_a_difference_of_means
+  PASS  test_analysis_e_noise::test_plot_has_no_cjk
+  PASS  test_analysis_e_noise::test_plot_renders_and_orders_alpha_by_heterogeneity
+  PASS  test_analysis_e_noise::test_rejects_duplicated_rows
+  PASS  test_analysis_e_noise::test_rejects_missing_columns
+  PASS  test_analysis_e_noise::test_rejects_missing_modes
+  PASS  test_analysis_e_noise::test_rejects_mixed_cells
+  PASS  test_analysis_e_noise::test_single_alpha_draws_markers_without_a_connecting_line
+  PASS  test_exp_f::test_build_grid_is_equidistant_and_drops_partial_tail
+  PASS  test_exp_f::test_compare_run_checkpoints_detects_difference
+  PASS  test_exp_f::test_compute_delta_is_bounded_and_deterministic
+  PASS  test_exp_f::test_delta_scale_is_hardcoded_and_checked_against_config
+  PASS  test_exp_f::test_frozen_generator_context_manager_checks_on_exit
+  PASS  test_exp_f::test_frozen_generator_detects_modification
+  PASS  test_exp_f::test_frozen_generator_freezes_gradients
+  PASS  test_exp_f::test_frozen_generator_rejects_train_mode
+  PASS  test_exp_f::test_frozen_xi_fn_ignores_model_and_labels
+  PASS  test_exp_f::test_generator_snapshot_path_prefers_new_layout_and_refuses_to_guess
+  PASS  test_exp_f::test_global_bn_borrowed_swaps_only_bn_parameters
+  PASS  test_exp_f::test_is_bn_key_matches_the_repo_rule_on_real_resnet_keys
+  PASS  test_exp_f::test_round_dir_name_sorts_lexicographically_like_numbers
+  PASS  test_exp_f::test_round_of_handles_both_layouts
+  PASS  test_exp_f::test_select_snapshot_clients_is_deterministic_and_respects_groups
+  PASS  test_exp_f::test_select_snapshot_clients_takes_all_when_pool_is_smaller
+  PASS  test_exp_f::test_slicer_raises_when_exhausted_or_shape_mismatched
+  PASS  test_exp_f::test_slicer_returns_chunks_in_order_and_resets_per_factory
+  PASS  test_exp_f::test_snapshot_recorder_aligns_to_grid_and_records_staleness
+  PASS  test_exp_f::test_snapshot_recorder_attach_is_idempotent
+  PASS  test_exp_f::test_snapshot_recorder_catches_up_multiple_grid_points_at_once
+  PASS  test_exp_f::test_snapshot_recorder_reports_missing_without_filling_them_in
+  PASS  test_analysis_f::test_classify_decay_distinguishes_no_data_from_inconclusive
+  PASS  test_analysis_f::test_classify_decay_reports_coadapt
+  PASS  test_analysis_f::test_classify_decay_reports_early_fast_late_flat
+  PASS  test_analysis_f::test_classify_decay_reports_stable
+  PASS  test_analysis_f::test_classify_decay_says_so_when_no_mature_generator
+  PASS  test_analysis_f::test_decay_table_retention_math
+  PASS  test_analysis_f::test_decay_table_returns_nan_when_diagonal_is_degenerate
+  PASS  test_analysis_f::test_matrix_pivot_leaves_lower_triangle_nan_not_zero
+  PASS  test_analysis_f::test_plots_render_without_cjk
+  PASS  test_analysis_f::test_sparse_grid_cannot_reach_the_stable_gap
+  PASS  test_analysis_f::test_summarize_drops_per_t_baseline_rows
+  PASS  test_analysis_f::test_summarize_keeps_staleness_as_a_covariate
+  PASS  test_invariant_agg::test_and_mask_is_strictly_greater_than_tau
+  PASS  test_invariant_agg::test_detach_restores_the_original_aggregator
+  PASS  test_invariant_agg::test_does_not_mutate_incoming_state_dicts
+  PASS  test_invariant_agg::test_does_not_mutate_w_prev
+  PASS  test_invariant_agg::test_fedbn_private_keys_bypass_mask_and_trim
+  PASS  test_invariant_agg::test_mask_freezes_dimensions_where_clients_disagree
+  PASS  test_invariant_agg::test_nonfloat_shared_keys_fall_back_to_mean_and_are_reported
+  PASS  test_invariant_agg::test_one_over_n_mode_scales_the_whole_update
+  PASS  test_invariant_agg::test_pseudo_gradient_is_old_minus_new
+  PASS  test_invariant_agg::test_reduces_to_fedavg_without_mask_or_trim
+  PASS  test_invariant_agg::test_round_stats_row_is_csv_friendly
+  PASS  test_invariant_agg::test_sign_consistency_counts_zeros_in_denominator_by_default
+  PASS  test_invariant_agg::test_sign_consistency_of_all_zero_dimension_is_zero_not_one
+  PASS  test_invariant_agg::test_sign_consistency_unanimous_and_split
+  PASS  test_invariant_agg::test_split_keys_on_a_real_resnet
+  PASS  test_invariant_agg::test_trim_count_uses_ceiling
+  PASS  test_invariant_agg::test_trimmed_mean_effective_n_matches_the_spec_warning
+  PASS  test_invariant_agg::test_trimmed_mean_raises_when_everything_is_trimmed
+  PASS  test_invariant_agg::test_trimmed_mean_removes_outliers_per_dimension
+  PASS  test_invariant_agg::test_use_invariant_aggregator_preserves_fedbn_behaviour
+  PASS  test_invariant_agg::test_verify_w_prev_catches_a_stale_global_model
+  PASS  test_invariant_agg::test_wrong_direction_would_move_away_from_clients
+  PASS  test_invariant_agg::test_zero_sign_ratio_is_reported
+  PASS  test_instrumentation::test_compose_influence_covers_every_defense_in_the_spec_table
+  PASS  test_instrumentation::test_compose_influence_refuses_to_guess_missing_parts
+  PASS  test_instrumentation::test_compose_influence_rejects_unknown_defense
+  PASS  test_instrumentation::test_influence_ratio_near_one_means_the_defense_did_nothing
+  PASS  test_instrumentation::test_influence_summary_reports_the_ratio_and_the_counts
+  PASS  test_instrumentation::test_median_influence_picks_the_middle_two_for_even_n
+  PASS  test_instrumentation::test_median_influence_sums_to_two_coordinates_worth
+  PASS  test_instrumentation::test_pooled_auc_handles_ties_as_half_credit
+  PASS  test_instrumentation::test_pooled_auc_is_not_the_mean_of_per_round_aucs
+  PASS  test_instrumentation::test_rank_distribution_excludes_and_counts_rounds_without_malicious
+  PASS  test_instrumentation::test_rank_distribution_skips_rounds_that_are_all_malicious
+  PASS  test_instrumentation::test_rank_histogram_length_matches_client_count
+  PASS  test_instrumentation::test_rank_window_fraction_counts_each_coordinate_once
+  PASS  test_instrumentation::test_recorder_orders_rounds_numerically
+  PASS  test_instrumentation::test_recorder_round_trip
+  PASS  test_instrumentation::test_sign_convention_does_not_change_any_signal
+  PASS  test_instrumentation::test_signals_ignore_fedbn_private_keys
+  PASS  test_instrumentation::test_trim_survival_agrees_with_the_aggregator_trim
+  PASS  test_instrumentation::test_trim_survival_matches_the_aggregator_window
+  PASS  test_instrumentation::test_trim_survival_of_an_outlier_client_is_zero
+  PASS  test_defenses::test_ablation_variants_are_parameterisations_of_one_aggregator
+  PASS  test_defenses::test_ablation_verdict_fails_when_a_single_component_is_not_worse
+  PASS  test_defenses::test_ablation_verdict_is_undetermined_when_the_combination_suppresses_nothing
+  PASS  test_defenses::test_ablation_verdict_is_undetermined_without_a_fedavg_baseline
+  PASS  test_defenses::test_ablation_verdict_passes_only_when_the_combination_actually_works
+  PASS  test_defenses::test_ablation_verdict_says_undetermined_when_variants_are_missing
+  FAIL  test_defenses::test_all_defenses_run_on_cuda_when_available
+  PASS  test_defenses::test_chance_mask_keep_ratio_matches_the_binomial_tail
+  PASS  test_defenses::test_decision_diagnosis_flags_a_tpr_that_is_only_an_exclusion_artefact
+  PASS  test_defenses::test_decision_diagnosis_refuses_defenses_without_client_decisions
+  PASS  test_defenses::test_decision_diagnosis_stays_quiet_when_detection_is_real
+  PASS  test_defenses::test_defenses_do_not_mutate_incoming_state_dicts
+  PASS  test_defenses::test_detection_table_computes_tpr_for_flame_and_multi_krum
+  PASS  test_defenses::test_detection_table_leaves_tpr_empty_for_defenses_without_decisions
+  PASS  test_defenses::test_detection_table_records_malicious_rank
+  PASS  test_defenses::test_every_defense_leaves_fedbn_keys_in_the_update_dict
+  PASS  test_defenses::test_fedavg_matches_repo_agg_avg
+  PASS  test_defenses::test_flame_clips_by_the_median_norm_and_records_both_norms
+  PASS  test_defenses::test_flame_noise_is_reproducible_with_a_seed
+  PASS  test_defenses::test_flame_noise_never_touches_the_global_rng
+  PASS  test_defenses::test_flame_noise_varies_across_rounds
+  PASS  test_defenses::test_flame_records_the_hdbscan_fallback_on_small_n
+  PASS  test_defenses::test_gram_matrix_matches_the_flattened_computation
+  PASS  test_defenses::test_mask_diagnosis_flags_chance_level_and_no_response
+  PASS  test_defenses::test_mask_diagnosis_stays_quiet_when_the_mask_actually_works
+  PASS  test_defenses::test_mask_only_variant_does_not_trim
+  PASS  test_defenses::test_median_takes_the_coordinatewise_median
+  PASS  test_defenses::test_multi_krum_excludes_the_outlier
+  PASS  test_defenses::test_multi_krum_influence_is_binary
+  PASS  test_defenses::test_oracle_exclude_aborts_when_every_client_is_malicious
+  PASS  test_defenses::test_oracle_exclude_can_wrap_another_rule
+  PASS  test_defenses::test_oracle_exclude_drops_exactly_the_malicious_updates
+  PASS  test_defenses::test_oracle_exclude_refuses_a_mask_of_the_wrong_length
+  PASS  test_defenses::test_oracle_exclude_requires_a_getter
+  PASS  test_defenses::test_oracle_exclude_yields_perfect_tpr_and_zero_fpr
+  PASS  test_defenses::test_preserve_rng_state_restores_all_three_streams
+  PASS  test_defenses::test_trim_only_variant_keeps_every_dimension
+  PASS  test_defenses::test_use_defense_restores_the_original_aggregator
+  PASS  test_analysis_ij::test_all_plots_render_without_cjk
+  PASS  test_analysis_ij::test_build_commands_always_tags_the_run
+  PASS  test_analysis_ij::test_defense_style_covers_every_defense_we_run
+  PASS  test_analysis_ij::test_expected_gap_matches_the_hypergeometric_pmf
+  PASS  test_analysis_ij::test_expected_gap_shrinks_as_density_grows
+  PASS  test_analysis_ij::test_j2_uses_only_single_malicious_rounds
+  PASS  test_analysis_ij::test_j4_restricts_to_the_plateau_by_default
+  PASS  test_analysis_ij::test_j5_returns_none_without_the_cosine_columns
+  PASS  test_analysis_ij::test_load_frames_rejects_missing_defense_column
+  PASS  test_analysis_ij::test_load_frames_splits_by_defense
+  PASS  test_analysis_density::test_accuracy_cost_is_per_asr_point_against_the_same_density
+  PASS  test_analysis_density::test_column_wins_over_the_filename
+  PASS  test_analysis_density::test_end_to_end_from_csv_to_figure
+  PASS  test_analysis_density::test_error_bars_come_from_seeds_not_from_within_run_scatter
+  PASS  test_analysis_density::test_filename_is_the_fallback_when_the_column_is_absent
+  PASS  test_analysis_density::test_missing_baseline_at_a_density_leaves_that_density_blank
+  PASS  test_analysis_density::test_multiple_seeds_are_pooled_per_run_first
+  PASS  test_analysis_density::test_negative_column_falls_back_instead_of_being_used_as_a_density
+  PASS  test_analysis_density::test_no_asr_reduction_leaves_the_cost_undefined_not_zero
+[analysis_density] 曲线在这些密度上断开（未测，不插值）：
+  multi_krum: 缺 bad=[2]
+[analysis_density] 曲线在这些密度上断开（未测，不插值）：
+  multi_krum: 缺 bad=[2]
+  PASS  test_analysis_density::test_paper_marker_is_a_single_point_not_a_horizontal_line
+  PASS  test_analysis_density::test_parse_bad_num_reads_the_tag_and_refuses_to_guess
+  PASS  test_analysis_density::test_plot_breaks_the_line_at_untested_densities
+[analysis_density] 曲线在这些密度上断开（未测，不插值）：
+  multi_krum: 缺 bad=[2]
+  PASS  test_analysis_density::test_plot_density_writes_a_file_and_passes_the_cjk_scan
+  PASS  test_analysis_density::test_runs_with_too_few_eval_rows_are_rejected_not_shortened
+  PASS  test_analysis_density::test_tail_summary_averages_only_the_last_rounds
+  PASS  test_analysis_density::test_unresolvable_density_raises_and_names_the_file
+  PASS  test_analysis_exposure::test_a_round_that_selects_nobody_contributes_zero
+  PASS  test_analysis_exposure::test_binary_defenses_use_the_number_selected
+  PASS  test_analysis_exposure::test_clip_scale_defaults_to_one_without_flame_fields
+  PASS  test_analysis_exposure::test_clip_scale_length_mismatch_raises
+  PASS  test_analysis_exposure::test_clipping_reduces_exposure_even_when_nothing_is_excluded
+  PASS  test_analysis_exposure::test_exposure_accumulates_across_rounds
+  PASS  test_analysis_exposure::test_fedavg_denominator_is_n_and_weights_sum_to_one
+  PASS  test_analysis_exposure::test_invariant_denominator_is_effective_trim_n
+  PASS  test_analysis_exposure::test_invariant_without_effective_trim_n_raises
+  PASS  test_analysis_exposure::test_join_matches_on_run_id
+  PASS  test_analysis_exposure::test_join_reports_when_nothing_matches
+  PASS  test_analysis_exposure::test_median_and_invariant_are_flagged_inexact
+  PASS  test_analysis_exposure::test_median_denominator_is_two_not_n
+  PASS  test_analysis_exposure::test_mismatched_array_lengths_raise
+  PASS  test_analysis_exposure::test_monotone_data_reports_collapse
+  PASS  test_analysis_exposure::test_oracle_exclude_absorbs_exactly_zero
+  PASS  test_analysis_exposure::test_plot_runs_and_passes_the_cjk_scan
+  PASS  test_analysis_exposure::test_threshold_needs_exactly_one_crossing
+  PASS  test_analysis_exposure::test_too_few_cells_is_undetermined_not_a_correlation
+  PASS  test_analysis_exposure::test_unrelated_data_does_not_claim_a_threshold
+  PASS  test_schedule::test_after_mta_ignores_missing_mta
+  PASS  test_schedule::test_after_mta_ignores_nan
+  PASS  test_schedule::test_after_mta_latches_once_triggered
+  PASS  test_schedule::test_benign_clients_are_never_touched
+  PASS  test_schedule::test_burst_is_half_open_on_the_right
+  PASS  test_schedule::test_continuous_installs_no_wrapper_at_all
+  PASS  test_schedule::test_continuous_is_always_on
+  PASS  test_schedule::test_duty_at_least_period_is_rejected_not_silently_continuous
+  PASS  test_schedule::test_early_stops_before_end
+  PASS  test_schedule::test_every_named_schedule_is_constructible
+  PASS  test_schedule::test_expected_attack_rounds_is_none_only_for_after_mta
+  PASS  test_schedule::test_gate_reads_mta_through_the_getter_not_a_snapshot
+  PASS  test_schedule::test_gate_turns_off_both_poisoning_and_the_generator
+  PASS  test_schedule::test_generator_schedule_keeps_generator_on_after_poison_stops
+  PASS  test_schedule::test_intermittent_duty_cycle
+  PASS  test_schedule::test_intermittent_respects_start_offset
+  PASS  test_schedule::test_late_starts_at_start
+  PASS  test_schedule::test_missing_required_parameters_are_rejected
+  PASS  test_schedule::test_recorded_flag_matches_what_actually_happened
+  PASS  test_schedule::test_restore_puts_everything_back
+  PASS  test_schedule::test_schedule_is_evaluated_once_per_round_not_once_per_call
+  PASS  test_schedule::test_unknown_kind_lists_the_options
+  PASS  test_analysis_exp1::test_1b_figures_hold_the_dose_fixed
+  PASS  test_analysis_exp1::test_all_figures_render_and_pass_the_cjk_scan
+  PASS  test_analysis_exp1::test_crossing_picks_the_first_crossing
+  PASS  test_analysis_exp1::test_dose_response_skips_runs_shorter_than_the_tail
+  PASS  test_analysis_exp1::test_dose_response_tiers_emits_three_tiers_with_tail_means
+  PASS  test_analysis_exp1::test_dose_response_tiers_skips_missing_columns
+  PASS  test_analysis_exp1::test_dose_response_uses_the_tail
+  PASS  test_analysis_exp1::test_load_derives_run_id_from_the_filename
+  PASS  test_analysis_exp1::test_load_rejects_old_csvs_missing_the_dose_columns
+  PASS  test_analysis_exp1::test_onset_reports_the_mta_at_the_first_poisoned_round
+  PASS  test_analysis_exp1::test_persistence_aligns_at_the_last_poisoned_round
+  PASS  test_analysis_exp1::test_persistence_curves_emits_three_aligned_lines
+  PASS  test_analysis_exp1::test_persistence_curves_empty_without_persist_runs
+  PASS  test_analysis_exp1::test_persistence_excludes_runs_that_never_stopped
+  PASS  test_analysis_exp1::test_persistence_skips_runs_that_never_attacked
+  PASS  test_analysis_exp1::test_plot_e1_6_renders
+  PASS  test_analysis_exp1::test_plot_e1b_2_renders_three_line_persistence
+  PASS  test_analysis_exp1::test_resolve_asr_falls_back_when_paper_column_absent
+  PASS  test_analysis_exp1::test_resolve_asr_falls_back_when_paper_column_all_nan
+  PASS  test_analysis_exp1::test_resolve_asr_prefers_paper_column
+  PASS  test_analysis_exp1::test_resolve_asr_raises_when_no_known_column
+  PASS  test_analysis_exp1::test_restrict_is_a_noop_without_other_schedules
+  PASS  test_analysis_exp1::test_runs_that_never_cross_stay_in_the_table
+  PASS  test_analysis_exp1::test_saturating_mta_alone_does_not_count_as_a_threshold
+  PASS  test_analysis_exp1::test_schedule_figures_handle_the_degenerate_cases
+  PASS  test_analysis_exp1::test_verdict_detects_a_tight_mta_threshold
+  PASS  test_analysis_exp1::test_verdict_detects_a_time_driven_pattern
+  PASS  test_analysis_exp1::test_verdict_is_undetermined_with_too_few_crossings
+  PASS  test_run_exp1::test_csv_has_paper_column_false_when_missing_file
+  PASS  test_run_exp1::test_csv_has_paper_column_ignores_substring_false_positives
+  PASS  test_run_exp1::test_csv_has_paper_column_true_only_when_column_present
+  PASS  test_run_exp1::test_fedbn_tags_are_unchanged_so_old_runs_still_resume
+  PASS  test_run_exp1::test_implantation_csv_matches_run_fl_naming
+  PASS  test_run_exp1::test_pfl_arm_is_passed_to_run_fl
+  PASS  test_run_exp1::test_the_two_arms_never_share_a_run_tag
+  PASS  test_run_exp1::test_unknown_pfl_arm_is_rejected_early
+  PASS  test_recompute_asr_final::test_aggregate_empty_tier_is_nan_not_zero
+  PASS  test_recompute_asr_final::test_aggregate_ignores_non_finite_values
+  PASS  test_recompute_asr_final::test_aggregate_splits_benign_all_malicious
+  PASS  test_represent::test_drift_against_itself_is_zero
+  PASS  test_represent::test_first_model_has_nan_drift_not_zero
+  PASS  test_represent::test_invalid_target_prototype_gives_nan_not_zero
+  PASS  test_represent::test_mismatched_feature_shapes_raise_instead_of_truncating
+  PASS  test_represent::test_no_trigger_transform_leaves_trigger_columns_nan
+  PASS  test_represent::test_prototype_distance_is_zero_for_a_single_collapsed_class
+  PASS  test_represent::test_table_computes_drift_against_the_previous_model_in_order
+  PASS  test_represent::test_table_rejects_mismatched_labels
+  PASS  test_represent::test_trigger_pull_is_negative_when_the_trigger_moves_away
+  PASS  test_represent::test_trigger_pull_is_positive_when_the_trigger_moves_toward_the_target
+  PASS  test_paramspace::test_average_rank_averages_ties
+  PASS  test_paramspace::test_binned_curve_keeps_empty_bins
+  PASS  test_paramspace::test_binned_curve_quantile_mode_splits_evenly
+  PASS  test_paramspace::test_binned_curve_uniform_edges_and_last_bin_is_closed
+  PASS  test_paramspace::test_bn_affine_is_detected_structurally_not_by_name
+  PASS  test_paramspace::test_cosine_is_nan_for_zero_vector_not_zero
+  PASS  test_paramspace::test_displacement_and_relative_scale_are_hand_computable
+  PASS  test_paramspace::test_displacement_refuses_mismatched_key_sets
+  PASS  test_paramspace::test_flatten_follows_index_order
+  PASS  test_paramspace::test_group_energy_rejects_mismatched_index
+  PASS  test_paramspace::test_group_energy_shares_sum_to_one
+  PASS  test_paramspace::test_index_orders_by_key_and_excludes_integer_buffers
+  PASS  test_paramspace::test_layer_table_separates_scaling_from_rewriting
+  PASS  test_paramspace::test_pearson_and_spearman_against_hand_values
+  PASS  test_paramspace::test_rank_quantile_of_uniform_subset_is_half
+  PASS  test_paramspace::test_sign_agreement_is_nan_when_nothing_comparable
+  PASS  test_paramspace::test_sign_agreement_skips_zeros_and_reports_denominator
+  PASS  test_paramspace::test_spearman_is_invariant_to_monotone_transform
+  PASS  test_paramspace::test_topk_energy_matches_hand_computation
+  PASS  test_paramspace::test_trainable_mask_excludes_bn_buffers
+  PASS  test_exp_t0::test_analyze_skips_missing_rounds_without_interpolating
+  PASS  test_exp_t0::test_attack_reference_falls_back_to_a_partial_window
+  PASS  test_exp_t0::test_build_windows_is_sorted_and_deduplicated
+  PASS  test_exp_t0::test_build_windows_labels_attack_anchor_and_segments
+  PASS  test_exp_t0::test_build_windows_marks_windows_crossing_the_stop_round_as_mixed
+  PASS  test_exp_t0::test_global_path_falls_back_to_npz_and_lists_rounds
+  PASS  test_exp_t0::test_load_state_reads_npz_without_torch
+  PASS  test_exp_t0::test_load_state_reports_missing_path
+  PASS  test_exp_t0::test_load_window_rows_leaves_aggregated_missing_when_kinds_absent
+  PASS  test_exp_t0::test_load_window_rows_round_trips_and_rebuilds_aggregated
+[exp_t0]      4 行 -> /tmp/tmp1do_o5wb/out/t0_windows.csv
+[exp_t0]     28 行 -> /tmp/tmp1do_o5wb/out/t0_layers.csv
+[exp_t0]     16 行 -> /tmp/tmp1do_o5wb/out/t0_energy.csv
+[exp_t0]     16 行 -> /tmp/tmp1do_o5wb/out/t0_bins.csv
+
+=== 位移剖面（BN buffer 已排除）===
+          window     kind  phase  rel(trainable)  rel(aggregated)   cos(θ,Δθ)  cos(from,to)
+        140->200   attack attack        0.742781           0.7698      0.7428      0.952288
+        200->250   anchor  clean       0.0569803         0.057735      0.9117      0.999752
+        200->300   anchor  clean       0.0683763         0.069282      0.9117      0.999650
+        250->300  segment  clean       0.0108306        0.0109599      0.9206      0.999991
+
+=== 判词 ===
+  n_windows                              4
+  displacement_scope                     aggregated
+  clean_window                           200->300
+  clean_span_rounds                      100
+  clean_relative_displacement            0.069282
+  clean_cos_from_to                      0.99965
+  attack_window                          140->200
+  attack_span_rounds                     60
+  attack_window_is_full                  True
+  attack_relative_displacement           0.7698
+  ratio_clean_over_attack                0.09
+
+  中间情形：比值 0.09 落在 0.05 与 0.5 之间，两个方向都不成立。如实报比值本身，**不要**据此选边。（口径：位移在 **global** 模型上测，而 B2 的 ASR 是 **benign 个性化模型**口径 —— 两者不是同一个模型；分母 = `aggregated` 参数，已扣掉 FedBN 冻结的 BN 仿射参数；BN buffer 单独报。）
+
+=== 干净阶段的漂移：定向还是随机游走 ===
+  窗口 200->300，由 2 段铺满
+  实测 ‖Δθ‖ 0.6  vs  各段正交时 0.509902  vs  完全同向时 0.6
+  实测/正交 = 1.177（同向/正交 = 1.177）
+
+[exp_t0] 判词 -> /tmp/tmp1do_o5wb/out/t0_verdict.json
+  PASS  test_exp_t0::test_main_runs_end_to_end_on_an_npz_fixture
+  PASS  test_exp_t0::test_random_walk_check_detects_orthogonal_increments
+  PASS  test_exp_t0::test_random_walk_check_returns_none_on_a_gap
+  PASS  test_exp_t0::test_random_walk_check_tiles_by_rounds_not_by_kind
+  PASS  test_exp_t0::test_verdict_calls_clean_phase_comparable_and_refuses_to_kill_a
+  PASS  test_exp_t0::test_verdict_flags_a_partial_reference_window
+  PASS  test_exp_t0::test_verdict_middle_case_refuses_to_pick_a_side
+  PASS  test_exp_t0::test_verdict_prefers_aggregated_scope_when_available
+  PASS  test_exp_t0::test_verdict_prefers_the_longest_clean_window
+  PASS  test_exp_t0::test_verdict_reports_a_span_matched_ratio
+  PASS  test_exp_t0::test_verdict_with_noise_floor_reports_the_multiple
+  PASS  test_exp_t0::test_verdict_without_attack_window_has_no_reference_scale
+  PASS  test_exp_t0::test_verdict_without_clean_window_says_so
+  PASS  test_exp_t0::test_verdict_without_noise_floor_says_undetermined
+  PASS  test_exp_t0::test_window_report_bins_are_returned_for_every_bin
+  PASS  test_exp_t0::test_window_report_layer_rows_cover_only_trainable_tensors
+  PASS  test_exp_t0::test_window_report_rank_correlation_is_hand_computable
+  PASS  test_exp_t0::test_window_report_reports_aggregated_scope_without_bn_affine
+  PASS  test_exp_t0::test_window_report_separates_trainable_from_bn_buffer
+  PASS  test_exp_t0::test_write_rows_unions_columns_and_leaves_gaps_empty
+  PASS  test_exp_t3::test_aggregate_results_averages_clients_and_attaches_the_profile
+  PASS  test_exp_t3::test_aggregate_results_leaves_an_all_nan_recipe_as_nan
+  PASS  test_exp_t3::test_anchor_round_uses_the_round_snapshot_and_drops_clients_without_one
+  PASS  test_exp_t3::test_anchor_round_without_any_snapshot_client_raises_clearly
+  PASS  test_exp_t3::test_append_row_refuses_to_write_a_different_column_set
+  PASS  test_exp_t3::test_append_row_writes_header_once_then_appends
+  PASS  test_exp_t3::test_apply_perturbation_keeps_float32_as_float32
+  PASS  test_exp_t3::test_apply_perturbation_only_touches_indexed_keys
+[exp_t3] 19 个配方 -> /tmp/tmpy5jo1jzo/out/t3_manifest.csv
+
+=== 漂移基准（200->400，aggregated 口径）===
+  实测相对位移 0.0197162（命令行给的基准 0.156）
+  ⚠️ 命令行基准与实测差得不小 —— 确认 --base-relative 是不是该改成 0.01972
+
+=== 标定自检 ===
+  family                    mult seed   target  achieved  cos(real)  layer dev
+  zero                         0    0   0.0000    0.0000        nan        nan
+  gaussian_global              1    0   0.1560    0.1560     0.3644     0.0092
+  gaussian_global              1    1   0.1560    0.1560    -0.0824     0.2306
+  gaussian_global              2    0   0.3120    0.3120     0.3644     0.0092
+  gaussian_global              2    1   0.3120    0.3120    -0.0824     0.2306
+  gaussian_layer_matched       1    0   0.1560    0.1560     0.3619     0.0000
+  gaussian_layer_matched       1    1   0.1560    0.1560    -0.0792     0.0000
+  gaussian_layer_matched       2    0   0.3120    0.3120     0.3619     0.0000
+  gaussian_layer_matched       2    1   0.3120    0.3120    -0.0792     0.0000
+  shuffled                     1    0   0.1560    0.1560     0.9000     0.0000
+  shuffled                     1    1   0.1560    0.1560     0.9500     0.0000
+  shuffled                     2    0   0.3120    0.3120     0.9000     0.0000
+  shuffled                     2    1   0.3120    0.3120     0.9500     0.0000
+  sign_flipped                 1    0   0.1560    0.1560     0.1000     0.0000
+  sign_flipped                 1    1   0.1560    0.1560     0.1000     0.0000
+  sign_flipped                 2    0   0.3120    0.3120     0.1000     0.0000
+  sign_flipped                 2    1   0.3120    0.3120     0.1000     0.0000
+  real                         1    0   0.1560    0.1560     1.0000     0.0000
+  real                         2    0   0.3120    0.3120     1.0000     0.0000
+
+  自检要点：achieved 必须等于 target；`real` 的 cos(real) 必须是 1；
+  `gaussian_layer_matched` 的 layer dev 必须 ≈ 0，而 `gaussian_global` 不会 —— 那正是两者的区别。
+  PASS  test_exp_t3::test_build_mode_runs_end_to_end_and_the_self_checks_hold
+  PASS  test_exp_t3::test_build_recipes_does_not_repeat_deterministic_families
+  PASS  test_exp_t3::test_build_recipes_gives_zero_exactly_one_cell
+  PASS  test_exp_t3::test_build_recipes_rejects_unknown_family
+  PASS  test_exp_t3::test_build_recipes_scales_target_by_the_base
+  PASS  test_exp_t3::test_calibrate_ignores_bn_and_measures_the_real_drift
+  PASS  test_exp_t3::test_calibrate_reports_a_missing_snapshot
+  PASS  test_exp_t3::test_defaults_are_the_ones_the_plan_pins
+[dry-run] 6 个配方 × 1 个客户端（只良性） = 6 格
+  每一格 = 该客户端 test 分区上的一趟 ASR（PGD num_iter=1 + 生成器 + 前向）加一趟干净准确率；全体客户端每轮合计 3 个样本。
+  读盘：客户端在外层循环 -> 每个 checkpoint **只读一次**（1 次），不是 6 次。
+  逐格写 /tmp/tmpyqd18sk7/o/t3_raw.csv；被抢占后加 --resume 续跑。
+  zero                     m=0     seed=0 target_rel=0.0000
+  gaussian_global          m=1     seed=0 target_rel=0.1560
+  gaussian_layer_matched   m=1     seed=0 target_rel=0.1560
+  shuffled                 m=1     seed=0 target_rel=0.1560
+  sign_flipped             m=1     seed=0 target_rel=0.1560
+  real                     m=1     seed=0 target_rel=0.1560
+
+  加 --execute 真跑。
+  PASS  test_exp_t3::test_dry_run_accepts_an_anchor_round
+  PASS  test_exp_t3::test_eval_clients_filters_malicious_and_honours_max_clients
+[dry-run] 6 个配方 × 2 个客户端（只良性） = 12 格
+  每一格 = 该客户端 test 分区上的一趟 ASR（PGD num_iter=1 + 生成器 + 前向）加一趟干净准确率；全体客户端每轮合计 6 个样本。
+  读盘：客户端在外层循环 -> 每个 checkpoint **只读一次**（2 次），不是 12 次。
+  逐格写 /tmp/tmpizpxp_3z/out/t3_raw.csv；被抢占后加 --resume 续跑。
+  zero                     m=0     seed=0 target_rel=0.0000
+  gaussian_global          m=1     seed=0 target_rel=0.1560
+  gaussian_layer_matched   m=1     seed=0 target_rel=0.1560
+  shuffled                 m=1     seed=0 target_rel=0.1560
+  sign_flipped             m=1     seed=0 target_rel=0.1560
+  real                     m=1     seed=0 target_rel=0.1560
+
+  加 --execute 真跑。
+  PASS  test_exp_t3::test_eval_dry_run_lists_recipes_without_touching_torch
+[exp_t3] ✗ 这个 run 目录缺 2 个 eval 需要的文件：
+    /tmp/tmpgtr_yfyt/run/meta.json
+    /tmp/tmpgtr_yfyt/run/generator.pt
+  client_*.pt / meta.json / generator.pt 由 hooks.save_run 在 run 结束时写在**根目录**（不是 round_XXXX/ 下）；
+  round_XXXX/global.pt 由 snapshots.SnapshotRecorder 写。缺哪类就补哪类。
+  PASS  test_exp_t3::test_eval_dry_run_reports_every_missing_input_at_once
+  PASS  test_exp_t3::test_gaussian_global_does_not_match_the_per_layer_profile
+  PASS  test_exp_t3::test_gaussian_layer_matched_matches_the_per_layer_profile
+  PASS  test_exp_t3::test_iso_acc_anchors_the_curve_at_the_zero_baseline
+  PASS  test_exp_t3::test_iso_acc_averages_seeds_before_interpolating
+  PASS  test_exp_t3::test_iso_acc_interpolates_between_measured_multipliers
+  PASS  test_exp_t3::test_iso_acc_needs_the_zero_baseline
+  PASS  test_exp_t3::test_iso_acc_refuses_to_extrapolate_beyond_measured_cost
+  PASS  test_exp_t3::test_load_done_keys_round_trips_recipe_and_client
+  PASS  test_exp_t3::test_make_direction_rejects_a_mismatched_index
+  PASS  test_exp_t3::test_missing_eval_inputs_finds_absent_client_checkpoints
+  PASS  test_exp_t3::test_profile_reports_cos_with_the_real_drift
+  PASS  test_exp_t3::test_random_families_are_reproducible_from_the_seed
+  PASS  test_exp_t3::test_real_family_is_the_drift_itself
+  PASS  test_exp_t3::test_recipe_key_is_stable_across_int_and_float_multipliers
+  PASS  test_exp_t3::test_scale_to_relative_hits_the_target_exactly
+  PASS  test_exp_t3::test_shuffled_preserves_layer_norms_but_moves_coordinates
+  PASS  test_exp_t3::test_sign_flipped_preserves_magnitudes_coordinate_by_coordinate
+  PASS  test_exp_t3::test_unknown_family_raises
+  PASS  test_exp_t3::test_verdict_calls_a_wide_basin_only_when_real_also_fails
+  PASS  test_exp_t3::test_verdict_calls_the_direction_special_when_only_real_erases
+  PASS  test_exp_t3::test_verdict_middle_case_refuses_to_pick_a_side
+  PASS  test_exp_t3::test_verdict_needs_a_random_control_at_the_iso_acc_point
+  PASS  test_exp_t3::test_verdict_needs_real_to_be_readable_at_the_iso_acc_point
+  PASS  test_exp_t3::test_verdict_needs_the_zero_baseline
+  PASS  test_exp_t3::test_verdict_reports_both_when_random_also_works
+  PASS  test_exp_t3::test_zero_family_is_exactly_zero
+  PASS  test_pfl_fedrep::test_batchnorm_is_shared_not_private
+  PASS  test_pfl_fedrep::test_body_phase_leaves_head_unchanged
+  PASS  test_pfl_fedrep::test_head_and_body_partition_is_exhaustive_and_disjoint
+  PASS  test_pfl_fedrep::test_head_is_removed_from_aggregation
+  PASS  test_pfl_fedrep::test_head_is_removed_from_distribution
+  PASS  test_pfl_fedrep::test_head_phase_leaves_backbone_bitwise_unchanged
+  PASS  test_pfl_fedrep::test_head_steps_matches_the_one_to_one_convention
+  PASS  test_pfl_fedrep::test_head_steps_split_leaves_work_for_both_phases
+  PASS  test_pfl_fedrep::test_mro_composes_rather_than_replaces
+  PASS  test_pfl_fedrep::test_only_the_classifier_head_is_private
+  PASS  test_pfl_fedrep::test_phase_counter_resets_every_round
+  PASS  test_pfl_fedrep::test_substring_rule_does_not_overmatch
+[FedRep] ⚠️ 未调用 configure_fedrep()，本客户端退化为普通单阶段训练（头与 backbone 一起训）。检查 run_fl.py 的接线。
+  PASS  test_pfl_fedrep::test_unconfigured_client_falls_back_and_warns
+  PASS  test_pfl_fedrep::test_upload_restores_requires_grad
+  PASS  test_pfl_fedrep::test_use_fedrep_registers_on_the_same_two_hooks_as_use_fedbn
+  PASS  test_paper_asr_filtered::test_all_samples_are_target_class_gives_nan_not_zero
+  PASS  test_paper_asr_filtered::test_every_declared_column_is_actually_written
+  PASS  test_paper_asr_filtered::test_filtered_and_unfiltered_match_hand_computed_values
+  PASS  test_paper_asr_filtered::test_filtered_columns_are_declared
+  PASS  test_paper_asr_filtered::test_filtered_denominator_excludes_the_target_class
+  PASS  test_paper_asr_filtered::test_model_training_mode_is_restored
+  PASS  test_paper_asr_filtered::test_paper_asr_returns_both_conventions
+  PASS  test_paper_asr_filtered::test_unfiltered_columns_are_untouched
+  PASS  test_paper_asr_filtered::test_unfiltered_is_bit_identical_to_the_old_behaviour
+
+519 passed, 3 failed in 250.92s
+
+======================================================================
+FAILED test_perturb::test_clip_diagnostics_is_all_zero_when_nothing_is_clipped
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/run_tests.py", line 94, in run
+    func()
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/test_perturb.py", line 222, in test_clip_diagnostics_is_all_zero_when_nothing_is_clipped
+    assert np.isclose(diagnostics["clipped_fraction"], 0.0)
+NameError: name 'np' is not defined
+
+
+======================================================================
+FAILED test_perturb::test_clip_diagnostics_quantifies_what_the_clamp_removed
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/run_tests.py", line 94, in run
+    func()
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/test_perturb.py", line 207, in test_clip_diagnostics_quantifies_what_the_clamp_removed
+    assert np.isclose(diagnostics["clipped_fraction"], 1.0)
+NameError: name 'np' is not defined
+
+
+======================================================================
+FAILED test_defenses::test_all_defenses_run_on_cuda_when_available
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/run_tests.py", line 94, in run
+    func()
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/tests/test_defenses.py", line 322, in test_all_defenses_run_on_cuda_when_available
+    update, outcome = build_defense(name, tau=0.2, trim_alpha=0.25)(
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/defenses.py", line 440, in __call__
+    raise ValueError(
+ValueError: OracleExclude 需要 malicious_getter —— 它要按真实标签剔除，所以必须能拿到当轮选中客户端的恶意掩码
+

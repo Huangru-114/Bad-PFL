@@ -1,0 +1,75 @@
+[env] python = apptainer exec --nv /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/torch_fl.sif python   (mode=apptainer)
+══ [1/3] FedRep 单元测试（含本机 skip 掉的 5 条）══
+  PASS  test_pfl_fedrep::test_batchnorm_is_shared_not_private
+  PASS  test_pfl_fedrep::test_body_phase_leaves_head_unchanged
+  PASS  test_pfl_fedrep::test_head_and_body_partition_is_exhaustive_and_disjoint
+  PASS  test_pfl_fedrep::test_head_is_removed_from_aggregation
+  PASS  test_pfl_fedrep::test_head_is_removed_from_distribution
+  PASS  test_pfl_fedrep::test_head_phase_leaves_backbone_bitwise_unchanged
+  PASS  test_pfl_fedrep::test_head_steps_matches_the_one_to_one_convention
+  PASS  test_pfl_fedrep::test_head_steps_split_leaves_work_for_both_phases
+  PASS  test_pfl_fedrep::test_mro_composes_rather_than_replaces
+  PASS  test_pfl_fedrep::test_only_the_classifier_head_is_private
+  PASS  test_pfl_fedrep::test_phase_counter_resets_every_round
+  PASS  test_pfl_fedrep::test_substring_rule_does_not_overmatch
+[FedRep] ⚠️ 未调用 configure_fedrep()，本客户端退化为普通单阶段训练（头与 backbone 一起训）。检查 run_fl.py 的接线。
+  PASS  test_pfl_fedrep::test_unconfigured_client_falls_back_and_warns
+  PASS  test_pfl_fedrep::test_upload_restores_requires_grad
+  PASS  test_pfl_fedrep::test_use_fedrep_registers_on_the_same_two_hooks_as_use_fedbn
+
+15 passed, 0 failed in 9.59s
+
+══ [2/3] 两条臂各一个 10 轮的短 run ══
+── fedbn ──
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+Files already downloaded and verified
+Files already downloaded and verified
+[PFL] fedbn | 私有=BN(γ/β+running stats) | 分类头共享
+[run_fl] 按轮次快照已开启：0 个网格点 × 12 个客户端 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn/round_XXXX/
+[run_fl] 防御 = fedavg（为逐轮埋点接管聚合；与 agg_avg 数值等价）
+  0%|          | 0/10 [00:00<?, ?it/s]/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/utils.py:18: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+ 10%|█         | 1/10 [00:05<00:50,  5.56s/it] 20%|██        | 2/10 [00:06<00:24,  3.02s/it] 30%|███       | 3/10 [00:09<00:19,  2.81s/it] 40%|████      | 4/10 [00:11<00:15,  2.66s/it] 50%|█████     | 5/10 [00:14<00:12,  2.58s/it] 60%|██████    | 6/10 [00:15<00:08,  2.12s/it] 70%|███████   | 7/10 [00:18<00:07,  2.57s/it] 80%|████████  | 8/10 [00:21<00:04,  2.50s/it] 90%|█████████ | 9/10 [00:23<00:02,  2.47s/it]100%|██████████| 10/10 [00:36<00:00,  5.79s/it]100%|██████████| 10/10 [00:36<00:00,  3.69s/it]
+[run_fl] 快照清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn/snapshot_manifest.json（0 个 (客户端, 网格点) 组合全部齐备）
+[run_fl] mode=attack alpha=0.5 seed=0 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn
+[run_fl] 植入过程 1 行 -> results/raw/exp_ij_implantation_fedavg_attack_a0.5_s0_vfedrep_fedbn.csv
+[run_fl] 逐 edge 14 行 -> results/raw/exp_ij_edge_fedavg_attack_a0.5_s0_vfedrep_fedbn.csv
+── fedrep ──
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+Files already downloaded and verified
+Files already downloaded and verified
+[PFL] fedrep | 私有=分类头 linear.* | BN 参与聚合 | 本地 7 步训头 + 8 步训 backbone
+[run_fl] 按轮次快照已开启：0 个网格点 × 12 个客户端 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedrep/round_XXXX/
+[run_fl] 防御 = fedavg（为逐轮埋点接管聚合；与 agg_avg 数值等价）
+  0%|          | 0/10 [00:00<?, ?it/s]/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/utils.py:18: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+ 10%|█         | 1/10 [00:03<00:33,  3.69s/it] 20%|██        | 2/10 [00:04<00:17,  2.16s/it] 30%|███       | 3/10 [00:07<00:15,  2.26s/it] 40%|████      | 4/10 [00:09<00:13,  2.24s/it] 50%|█████     | 5/10 [00:11<00:11,  2.24s/it] 60%|██████    | 6/10 [00:12<00:07,  1.84s/it] 70%|███████   | 7/10 [00:15<00:06,  2.32s/it] 80%|████████  | 8/10 [00:18<00:04,  2.28s/it] 90%|█████████ | 9/10 [00:20<00:02,  2.27s/it]100%|██████████| 10/10 [00:33<00:00,  5.69s/it]100%|██████████| 10/10 [00:33<00:00,  3.38s/it]
+[run_fl] 快照清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedrep/snapshot_manifest.json（0 个 (客户端, 网格点) 组合全部齐备）
+[run_fl] mode=attack alpha=0.5 seed=0 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedrep
+[run_fl] 植入过程 1 行 -> results/raw/exp_ij_implantation_fedavg_attack_a0.5_s0_vfedrep_fedrep.csv
+[run_fl] 逐 edge 14 行 -> results/raw/exp_ij_edge_fedavg_attack_a0.5_s0_vfedrep_fedrep.csv
+
+══ [3/3] 对拍：两条臂各自冻结/更新了正确的参数 ══
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/evidence_fedrep.py:57: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  return torch.load(path, map_location="cpu")
+
+全局模型：训练结束 vs 训练开始（逐位比较）
+
+参数组                    fedbn 臂                          fedrep 臂                        
+----------------------------------------------------------------------------------------
+linear.* (分类头)         2/2   变，max|Δ|=6.035e-02         0/2   变，max|Δ|=0.000e+00      
+bn* / shortcut.1*        0/60  变，max|Δ|=0.000e+00        60/60  变，max|Δ|=1.641e+00      
+其余 backbone             12/12  变，max|Δ|=5.352e-02        12/12  变，max|Δ|=3.076e-02      
+
+判据：
+  ✅  fedbn  的分类头应当**变了**（共享，参与聚合）
+  ✅  fedbn  的 BN 应当**逐位不变**（私有，被 pop）
+  ✅  fedrep 的分类头应当**逐位不变**（私有，被 pop）
+  ✅  fedrep 的 BN 应当**变了**（参与聚合）
+  ✅  两条臂的其余 backbone 都应当变了（否则聚合根本没跑）
+
+✅ 2×2 对角线全部成立：两条臂的私有/共享划分都与定义一致，且互为对照（同一份代码只换 --pfl）。
+
+[verify] ✓ FedRep 通过门禁 —— 可以跑 Stage B 标定了。

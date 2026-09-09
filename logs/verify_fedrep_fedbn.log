@@ -1,0 +1,14 @@
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+Files already downloaded and verified
+Files already downloaded and verified
+[PFL] fedbn | 私有=BN(γ/β+running stats) | 分类头共享
+[run_fl] 按轮次快照已开启：0 个网格点 × 12 个客户端 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn/round_XXXX/
+[run_fl] 防御 = fedavg（为逐轮埋点接管聚合；与 agg_avg 数值等价）
+  0%|          | 0/10 [00:00<?, ?it/s]/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/utils.py:18: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+ 10%|█         | 1/10 [00:05<00:50,  5.56s/it] 20%|██        | 2/10 [00:06<00:24,  3.02s/it] 30%|███       | 3/10 [00:09<00:19,  2.81s/it] 40%|████      | 4/10 [00:11<00:15,  2.66s/it] 50%|█████     | 5/10 [00:14<00:12,  2.58s/it] 60%|██████    | 6/10 [00:15<00:08,  2.12s/it] 70%|███████   | 7/10 [00:18<00:07,  2.57s/it] 80%|████████  | 8/10 [00:21<00:04,  2.50s/it] 90%|█████████ | 9/10 [00:23<00:02,  2.47s/it]100%|██████████| 10/10 [00:36<00:00,  5.79s/it]100%|██████████| 10/10 [00:36<00:00,  3.69s/it]
+[run_fl] 快照清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn/snapshot_manifest.json（0 个 (客户端, 网格点) 组合全部齐备）
+[run_fl] mode=attack alpha=0.5 seed=0 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_vfedrep_fedbn
+[run_fl] 植入过程 1 行 -> results/raw/exp_ij_implantation_fedavg_attack_a0.5_s0_vfedrep_fedbn.csv
+[run_fl] 逐 edge 14 行 -> results/raw/exp_ij_edge_fedavg_attack_a0.5_s0_vfedrep_fedbn.csv

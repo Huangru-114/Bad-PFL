@@ -1,0 +1,18 @@
+  PASS  test_pfl_fedrep::test_batchnorm_is_shared_not_private
+  PASS  test_pfl_fedrep::test_body_phase_leaves_head_unchanged
+  PASS  test_pfl_fedrep::test_head_and_body_partition_is_exhaustive_and_disjoint
+  PASS  test_pfl_fedrep::test_head_is_removed_from_aggregation
+  PASS  test_pfl_fedrep::test_head_is_removed_from_distribution
+  PASS  test_pfl_fedrep::test_head_phase_leaves_backbone_bitwise_unchanged
+  PASS  test_pfl_fedrep::test_head_steps_matches_the_one_to_one_convention
+  PASS  test_pfl_fedrep::test_head_steps_split_leaves_work_for_both_phases
+  PASS  test_pfl_fedrep::test_mro_composes_rather_than_replaces
+  PASS  test_pfl_fedrep::test_only_the_classifier_head_is_private
+  PASS  test_pfl_fedrep::test_phase_counter_resets_every_round
+  PASS  test_pfl_fedrep::test_substring_rule_does_not_overmatch
+[FedRep] ⚠️ 未调用 configure_fedrep()，本客户端退化为普通单阶段训练（头与 backbone 一起训）。检查 run_fl.py 的接线。
+  PASS  test_pfl_fedrep::test_unconfigured_client_falls_back_and_warns
+  PASS  test_pfl_fedrep::test_upload_restores_requires_grad
+  PASS  test_pfl_fedrep::test_use_fedrep_registers_on_the_same_two_hooks_as_use_fedbn
+
+15 passed, 0 failed in 9.59s

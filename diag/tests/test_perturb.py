@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from diag.perturb import (MODES, apply_perturbation, delta_from_generator, linf,
                           make_delta_fn, make_xi_fn)
