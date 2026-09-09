@@ -476,3 +476,20 @@ def test_per_client_accuracy_uses_the_clients_own_loader():
         "缺 loader 要返回 nan，不是 0（铁律 #5）"
     assert "from utils import evaluate_accuracy" in body, \
         "用上游 main.py 自己那把尺，否则两边的准确率不同口径"
+
+
+def test_per_client_accuracy_is_a_fraction_not_a_percentage():
+    """`utils.evaluate_accuracy` 返回百分数，本 CSV 其它列都是 [0,1]。
+
+    不换算的话这一列会比邻列大 100 倍，而 CSV 上看不出单位 —— 第一版漏了，
+    实测印出 59.3056 / 73.2986 才发现。
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    body = (root / "track.py").read_text(encoding="utf-8") \
+        .split("def _local_acc")[1].split("\n    def ")[0]
+    assert "/ 100.0" in body, "evaluate_accuracy 的百分数没有换算成比例"
+
+    upstream = (root.parent / "utils.py").read_text(encoding="utf-8")
+    assert "100 * correct / total" in upstream, \
+        "上游 evaluate_accuracy 不再返回百分数了 —— 那这里的 /100 要去掉，去核对"

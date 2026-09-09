@@ -527,7 +527,11 @@ class TrainingTracker:
         from utils import evaluate_accuracy      # main.py 自己用的那一个
         was_training = model.training
         try:
-            return float(evaluate_accuracy(model, loader))
+            # ⚠️ `utils.evaluate_accuracy` 返回的是**百分数**
+            # （`utils.py:47` 是 `100 * correct / total`），而本 CSV 里其它列
+            # 一律是 [0, 1] 的比例。不换算的话这一列会比邻列大 100 倍 ——
+            # 第一版就漏了，实测印出 59.3056 / 73.2986。
+            return float(evaluate_accuracy(model, loader)) / 100.0
         finally:
             model.train(was_training)
 

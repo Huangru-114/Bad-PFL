@@ -60,6 +60,9 @@ CKPT="${BADPFL_CKPT_ROOT:-$ROOT/checkpoints}"
 ROUNDS="${PROBE_ROUNDS:-300}"          # 论文默认
 
 # 格子：名字|臂|总步数|头步数（fedbn 臂头步数写 -，不传该参数）
+# ⚠️ **A 也要跑**（2026-09-09 更正）：`acc_local_*` 是**与臂无关**的列，
+#    fedbn 臂照样有值 —— 而它正是现在唯一能把两条臂放在一起比的那一列。
+#    只有 MTA_sh / ASR_sh 是 FedRep 专属（fedbn 的全局 BN 停在初始化值）。
 CELLS=(
   "A|fedbn|15|-"        # 锚点：论文配置，复现 HANDOFF.md:325 的 0.9195
   "B1|fedrep|15|7"      # 现状 1:1（default_head_steps 的结果）
