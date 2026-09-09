@@ -109,6 +109,11 @@ IMPLANTATION_COLUMNS = [
     # **仅 FedRep 臂有值**，fedbn / 无 pfl 的 run 全是 nan（不是 0，铁律 #5）。
     "mta_personalized_shared", "asr_paper_shared_benign",
     "asr_paper_filtered_shared_benign",
+    # 逐客户端**自己的**留出分片上的干净准确率（= tf-dpfl 的 pm_acc 口径）。
+    # mta_* 测在共享的**类别均衡**探针上，那是比较 PFL 方法的错误仪器 ——
+    # 它系统性惩罚 FedRep 的私有头而不惩罚 FedBN 的全局头。见 _local_acc。
+    "acc_local_personalized", "acc_local_malicious",
+    "acc_local_personalized_shared",
     "clean_loss_personalized", "clean_loss_global",
     "acc_target_class_personalized", "acc_target_class_global",
     "mask_keep_ratio", "effective_trim_n", "zero_sign_ratio",
@@ -494,6 +499,38 @@ class TrainingTracker:
         return {int(c.cid): self._paper_asr_frozen(c.local_model, int(c.cid))
                 for c in both}
 
+    def _local_acc(self, model: Any, loader: Any) -> float:
+        """在**该客户端自己的** test loader 上的干净准确率。
+
+        # 为什么必须另立一列（2026-09-09 实测逼出来的）
+
+        `mta_personalized` 测在 `self.probe` —— 一份**共享的、类别均衡的**探针集
+        （`config.yaml:164`，`n_other_per_class: 200` 是刻意配平的）。那份探针对
+        实验 A 的归因是对的（只让模型变、数据不变），但**它是比较 PFL 方法的错误
+        仪器**：
+
+            FedBN  的个性化模型带的是**全局聚合的分类头** → 本来就是全局分类器，
+                   在均衡集上表现好；
+            FedRep 的个性化模型带的是**该客户端的私有头** → Dirichlet α=0.5 下
+                   只见过 3–4 个主类，被要求在 10 类均衡集上判 → 塌。
+
+        FedRep 优化的恰恰是「在**自己的**分布上准」，用全局均衡集去量它，
+        量的是它没在优化的东西。而 `asr_paper_*` 一直用的是客户端自己的
+        test loader —— **两个数字此前不在同一个 population**
+        （tf-dpfl 陷阱 #11 的同一类错误）。
+
+        本列与 tf-dpfl 的 `pm_acc` 同口径（逐客户端留出分片），两库这才能同框。
+        缺 loader → nan，不是 0（铁律 #5）。
+        """
+        if loader is None:
+            return float("nan")
+        from utils import evaluate_accuracy      # main.py 自己用的那一个
+        was_training = model.training
+        try:
+            return float(evaluate_accuracy(model, loader))
+        finally:
+            model.train(was_training)
+
     def _fedrep_shared_pm(self, server: Any, client: Any):
         """FedRep 定义的个性化模型：**[当前共享表示 φ, 该客户端的私有头 h]**。
 
@@ -619,12 +656,15 @@ class TrainingTracker:
         #   要由数据判，不是由我改个口径就宣布对了（铁律 #2）。
         #   非 FedRep 臂上 _fedrep_shared_pm 返回 None → 整组留空。
         shared_rows, shared_paper, shared_paper_filtered = [], {}, {}
+        shared_local_acc: Dict[int, float] = {}
         for client in eval_clients:
             pm = self._fedrep_shared_pm(server, client)
             if pm is None:
                 continue
+            loader = getattr(client, "test_dataloader", None)
             shared_rows.append(self._evaluate_model(pm))
-            u, f = self._paper_asr(pm, getattr(client, "test_dataloader", None))
+            shared_local_acc[int(client.cid)] = self._local_acc(pm, loader)
+            u, f = self._paper_asr(pm, loader)
             shared_paper[int(client.cid)] = u
             shared_paper_filtered[int(client.cid)] = f
             del pm
@@ -652,11 +692,15 @@ class TrainingTracker:
         # 不是全 40 个客户端；要全量就把 eval_client_ids 放到全部良性）。
         paper_by_cid: Dict[int, float] = {}
         paper_filtered_by_cid: Dict[int, float] = {}
+        local_acc_by_cid: Dict[int, float] = {}
         for client in eval_clients + malicious_clients:
-            unfiltered, filtered = self._paper_asr(
-                client.local_model, getattr(client, "test_dataloader", None))
+            loader = getattr(client, "test_dataloader", None)
+            unfiltered, filtered = self._paper_asr(client.local_model, loader)
             paper_by_cid[int(client.cid)] = unfiltered
             paper_filtered_by_cid[int(client.cid)] = filtered
+            # 同一个 loader 上的干净准确率 —— 与 ASR 同 population（见 _local_acc）
+            local_acc_by_cid[int(client.cid)] = self._local_acc(
+                client.local_model, loader)
         # full_poison_func 内部 PGD 会把梯度累加进被绑定的恶意客户端模型；
         # client.py 在下次本地训练取数前会 zero_grad，本无副作用，但按诊断惯例
         # 主动清掉,避免与 layer_metrics 等其它读操作相互干扰。
@@ -688,6 +732,9 @@ class TrainingTracker:
             return float(np.mean(values)) if values else float("nan")
 
         mta_shared = _mean_shared("mta")
+        acc_local_personalized = _mean_over(local_acc_by_cid, benign_cids)
+        acc_local_malicious = _mean_over(local_acc_by_cid, malicious_cids)
+        acc_local_shared = _mean_over(shared_local_acc, benign_cids)
         asr_paper_shared_benign = _mean_over(shared_paper, benign_cids)
         asr_paper_filtered_shared_benign = _mean_over(shared_paper_filtered,
                                                       benign_cids)
@@ -760,6 +807,9 @@ class TrainingTracker:
             "mta_personalized": _mean("mta"),
             "mta_global": global_row["mta"],
             "mta_personalized_shared": mta_shared,
+            "acc_local_personalized": acc_local_personalized,
+            "acc_local_malicious": acc_local_malicious,
+            "acc_local_personalized_shared": acc_local_shared,
             "asr_paper_shared_benign": asr_paper_shared_benign,
             "asr_paper_filtered_shared_benign": asr_paper_filtered_shared_benign,
             "clean_loss_personalized": _mean("clean_loss"),

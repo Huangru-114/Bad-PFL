@@ -194,8 +194,15 @@ class _FakeBaseClient:
         self.received += 1
 
     def local_update(self):
-        """跑一步真实的 forward/backward/step，这样冻结与否是可观测的。"""
+        """跑一步真实的 forward/backward/step，这样冻结与否是可观测的。
+
+        ⚠️ **必须逐行复刻 `client.py:local_update` 的相关行为**，特别是
+        `self.local_model.train()` —— 第一版漏了它，于是「头阶段 BN 被
+        `.train()` 拉回训练模式」这个真实 bug 在本地全绿、在集群上跑了 300 轮
+        才从 MTA 上看出来。**假客户端与真客户端的差异 = 测不到的 bug。**
+        """
         self.updates += 1
+        self.local_model.train()             # ← client.py:local_update 每步都调
         opt = torch.optim.SGD(self.local_model.parameters(), lr=0.5)
         opt.zero_grad()
         x = torch.randn(8, 3, 4, 4)
@@ -400,3 +407,72 @@ def test_shared_pm_is_gated_on_the_fedrep_arm():
     src = _track_src()
     assert 'hasattr(client, "_fedrep_head_steps")' in src
     assert "return None" in src.split("def _fedrep_shared_pm")[1].split("def ")[0]
+
+
+# ── BN 冻结的方式（2026-09-09：第一版用 .eval()，被 .train() 每步撤销）────────
+def _fedrep_src() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "pfl_fedrep.py").read_text(encoding="utf-8")
+
+
+def test_norm_freeze_uses_track_running_stats_not_eval_mode():
+    """`client.py:local_update` **每一步**都调 `self.local_model.train()`，
+    而 `_fedrep_set_phase` 只在相位切换时调用一次 —— 用 `.eval()` 冻 BN 的话，
+    头阶段第一步之后就被撤销了，running stats 全程在更新并被上传。
+
+    `.train()` 不碰 `track_running_stats`，所以设一次就稳；而且它更正确 ——
+    eval 模式会改变头阶段 forward 的归一化来源。
+    """
+    body = _fedrep_src().split("def _fedrep_set_phase")[1].split("\n    def ")[0]
+    # **只看代码，不看注释** —— 本文件的注释里就写着 `.eval()` 三个字，
+    # 拿原文匹配会被自己的说明文字绊倒（第一版就是）。
+    code = "\n".join(ln for ln in body.splitlines()
+                     if not ln.lstrip().startswith("#") and '"""' not in ln)
+    assert "track_running_stats" in code
+    assert ".eval()" not in code and "m.train(" not in code, \
+        "又用回模块 train/eval 了 —— 那会被 client.py 每步的 .train() 撤销"
+
+
+def test_norm_tracking_is_restored_before_upload_and_eval():
+    """`track_running_stats=False` 时 BN 在 eval 模式下也用 batch 统计量，
+    评估的就不是部署时那个函数。head_steps == local_steps 时相位永不切换，
+    所以恢复不能只靠 _fedrep_set_phase("body")。"""
+    src = _fedrep_src()
+    assert "def _fedrep_restore_norm" in src
+    assert "_fedrep_restore_norm()" in src.split("def upload_model")[1]
+
+
+def test_the_fake_base_client_replicates_the_real_local_update():
+    """**假客户端与真客户端的差异 = 测不到的 bug。**
+
+    第一版的 `_FakeBaseClient.local_update` 漏了 `self.local_model.train()`，
+    于是上面那个 BN bug 在本地全绿、在集群上跑满 300 轮才从 MTA 上看出来。
+    """
+    from pathlib import Path
+    tests_src = Path(__file__).read_text(encoding="utf-8")
+    fake = tests_src.split("class _FakeBaseClient")[1].split("\nclass ")[0]
+    assert "self.local_model.train()" in fake
+
+    real = (Path(__file__).resolve().parent.parent.parent / "client.py").read_text(encoding="utf-8")
+    real_body = real.split("    def local_update(self):")[1].split("\n    def ")[0]
+    assert "self.local_model.train()" in real_body, \
+        "上游 local_update 不再调 .train() 了 —— 本测试的前提变了，去核对 _fedrep_set_phase"
+
+
+# ── 逐客户端分布上的准确率（mta_* 用的是共享均衡探针，是错的仪器）──────────
+def test_per_client_accuracy_columns_are_registered():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "track.py").read_text(encoding="utf-8")
+    for col in ("acc_local_personalized", "acc_local_malicious",
+                "acc_local_personalized_shared"):
+        assert src.count(f'"{col}"') >= 2, f"{col} 要既登记进列表、又出现在落行处"
+
+
+def test_per_client_accuracy_uses_the_clients_own_loader():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "track.py").read_text(encoding="utf-8")
+    body = src.split("def _local_acc")[1].split("\n    def ")[0]
+    assert "loader is None" in body and 'float("nan")' in body, \
+        "缺 loader 要返回 nan，不是 0（铁律 #5）"
+    assert "from utils import evaluate_accuracy" in body, \
+        "用上游 main.py 自己那把尺，否则两边的准确率不同口径"

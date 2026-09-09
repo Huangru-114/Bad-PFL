@@ -77,7 +77,8 @@ def main(argv=None) -> int:
     print(f"[probe] 末 {args.tail} 点均值；ASR 列 = {args.asr_col}")
     print(f"[probe] 锚点：上游 main.py 论文配置复现 = 0.9195（论文报 0.8222）\n")
     hdr = (f"{'格':>4} {'arm':>7} {'总步':>5} {'轮':>5} {'点':>4} "
-           f"{'MTA':>9} {'ASR':>9} {'MTA_sh':>9} {'ASR_sh':>9}  说明")
+           f"{'MTA_pb':>8} {'ASR':>8} {'MTA_sh':>8} {'ASR_sh':>8} "
+           f"{'ACC_loc':>8} {'ACCloc_sh':>10}  说明")
     print(hdr); print("-" * (len(hdr) + 20))
     NOTE = {"A": "锚点：论文配置 + fedbn",
             "B1": "现状 1:1（default_head_steps）",
@@ -87,14 +88,21 @@ def main(argv=None) -> int:
         rounds = [int(r["round"]) for r in c["rows"] if r.get("round")]
         print(f"{c['name']:>4} {c['arm']:>7} {c['steps']:>5} "
               f"{(max(rounds) if rounds else 0):>5} {len(c['rows']):>4} "
-              f"{_fmt(tail_mean(c['rows'], args.mta_col, args.tail)):>9} "
-              f"{_fmt(tail_mean(c['rows'], args.asr_col, args.tail)):>9} "
-              f"{_fmt(tail_mean(c['rows'], 'mta_personalized_shared', args.tail)):>9} "
-              f"{_fmt(tail_mean(c['rows'], 'asr_paper_shared_benign', args.tail)):>9}  "
+              f"{_fmt(tail_mean(c['rows'], args.mta_col, args.tail)):>8} "
+              f"{_fmt(tail_mean(c['rows'], args.asr_col, args.tail)):>8} "
+              f"{_fmt(tail_mean(c['rows'], 'mta_personalized_shared', args.tail)):>8} "
+              f"{_fmt(tail_mean(c['rows'], 'asr_paper_shared_benign', args.tail)):>8} "
+              f"{_fmt(tail_mean(c['rows'], 'acc_local_personalized', args.tail)):>8} "
+              f"{_fmt(tail_mean(c['rows'], 'acc_local_personalized_shared', args.tail)):>10}  "
               f"{NOTE.get(c['name'], '')}")
 
     print("\n判读：")
     print("  A 的 ASR 落在 0.82–0.92  → 管线成立（2026-09-09 实测 0.8201，已成立）。")
+    print("  MTA_pb         = **共享的类别均衡探针**上的准确率 —— 比较 PFL 方法时")
+    print("                   这是错的仪器：它系统性惩罚 FedRep 的私有头而不惩罚")
+    print("                   FedBN 的全局头。**看 ACC_loc 那两列。**")
+    print("  ACC_loc/ACCloc_sh = 各客户端**自己的**留出分片上的准确率")
+    print("                   （= tf-dpfl 的 pm_acc 口径，与 ASR 同一个 population）")
     print("  MTA / ASR      = 在 client.local_model 上测：[漂移后的 φ′, 阶段1 的头]")
     print("  MTA_sh / ASR_sh= FedRep 定义的个性化模型：[当前共享表示, 私有头]")
     print("    → 若 MTA_sh 显著高于 MTA，说明此前的低 MTA/低 ASR 是**评估口径伪影**，")

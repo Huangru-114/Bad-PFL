@@ -227,9 +227,33 @@ class FedRepMixin:
         # 头阶段：backbone 必须**彻底**冻结。只关 requires_grad 不够 ——
         # forward 仍会推进 BN 的 running_mean / running_var，而 BN 在 FedRep 下
         # 是要上传聚合的，那部分改动会静默进到上传物里。
+        #
+        # ⚠️ **不能用 `m.eval()`**（2026-09-09 实测，这是第一版的 bug）：
+        #   `client.py:local_update` 每一步都调 `self.local_model.train()`，
+        #   把所有模块拉回训练模式；而本方法只在**相位切换**时调用一次
+        #   （step 0 与 head→body）。于是头阶段第一步之后 BN 就回到 train，
+        #   running stats 全程在被本地非 IID 数据更新并上传。
+        #   测试没抓到，因为 _FakeBaseClient.local_update 漏了那一行 `.train()`
+        #   —— 假绿（现已补上）。
+        #
+        # 改用 `track_running_stats`：`.train()` 不碰它，所以设一次就稳。
+        # 而且它比 `.eval()` **更正确** —— eval 模式下 BN 用 running stats 归一化，
+        # 会改变头阶段的 forward 数值；track_running_stats=False 仍用 batch 统计量
+        # （与训练一致），只是不更新 buffer。
         for m in self._fedrep_body_norm_modules():
-            m.train(not train_head)
+            m.track_running_stats = not train_head
         self._fedrep_phase = phase
+
+    def _fedrep_restore_norm(self) -> None:
+        """恢复 BN 的 running-stats 追踪。
+
+        必须在**评估之前**恢复：`track_running_stats=False` 时 BN 在 eval 模式下
+        也用 batch 统计量，那样测出来的准确率与部署时的模型不是同一个函数。
+        `head_steps == local_steps`（没有 body 阶段）时相位永不切换，
+        所以不能只靠 `_fedrep_set_phase("body")` 来恢复。
+        """
+        for m in self._fedrep_body_norm_modules():
+            m.track_running_stats = True
 
     # ---- 训练循环钩子 -----------------------------------------------------
 
@@ -272,8 +296,7 @@ class FedRepMixin:
         finally:
             for p in self.local_model.parameters():
                 p.requires_grad_(True)
-            for m in self._fedrep_body_norm_modules():
-                m.train(True)
+            self._fedrep_restore_norm()
 
 
 def make_fedrep_class(base_cls: type) -> type:
