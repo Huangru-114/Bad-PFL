@@ -4,12 +4,13 @@
 #
 #   bash diag/submit_exp1.sh <stage> [--dry-run] [--max-parallel N]
 #
-#   stage ∈ 1 | corner | arm | 1b | persist
+#   stage ∈ 1 | corner | arm | 1b | persist | calib
 #     1        十字扫描：ρ 8 档 @ Nm=4  +  Nm 6 档 @ ρ=0.1（13 格）
 #     corner   塌陷角：ρ{0.7,0.9,1.0} × Nm{16,32}（6 格，Nm=4 已在十字里）
 #     arm      PFL 对照臂：只在十字交叉点，fedbn/fedrep 各跑
 #     1b       攻击时间结构（调度）
 #     persist  B2 持续性长跑
+#     calib    Stage B 收敛标定
 #
 #   SEEDS="0 1 2" bash diag/submit_exp1.sh 1        # 换 seed 集
 #   PFL=fedrep    bash diag/submit_exp1.sh arm      # 换 PFL 臂
@@ -26,8 +27,17 @@
 # ══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-STAGE="${1:?用法: bash diag/submit_exp1.sh <1|corner|arm|1b|persist> [--dry-run]}"
+STAGE="${1:?用法: bash diag/submit_exp1.sh <1|corner|arm|1b|persist|calib> [--dry-run]}"
 shift || true
+
+# 提前校验，防止 --submit 之类的 typo 被当作 stage 传给 argparse（它会当成另一个 flag，
+# 报 "argument --stage: expected one argument"，让人误以为是脚本 bug）。
+case "$STAGE" in
+    1|corner|arm|1b|persist|calib) ;;
+    *) echo "错误：未知 stage '$STAGE'。可选：1 / corner / arm / 1b / persist / calib" >&2
+       echo "用法：bash diag/submit_exp1.sh <stage> [--dry-run] [--max-parallel N]" >&2
+       exit 2 ;;
+esac
 
 DRY=0
 MAXP="${MAX_PARALLEL:-8}"        # array 并发上限，别一次占满队列
@@ -46,11 +56,9 @@ cd "$ROOT"
 source "$ROOT/diag/cluster_env.sh"
 
 SEEDS="${SEEDS:-}"
-# **默认 fedrep**：Exp 1 与 Exp 3 对齐（用户决策）。fedbn 只作为对照臂
-# （`--stage arm`）存在。`run_exp1.py` 自己的默认值仍是 fedbn —— 那是为了
-# 让 2026-08 之前的 fedbn 产物在 --skip-existing 下仍认得出（tag 不带后缀），
-# 所以**提交器一律显式传 --pfl**，不依赖那个默认值。
-PFL="${PFL:-fedbn}"   # 2026-09-09：Exp 1 走已验证的 FedBN 通路（见 config.yaml exp1 注释）
+# Exp 1 走已验证的 FedBN 通路（2026-09-09 决策，见 config.yaml exp1 注释）。
+# 提交器一律显式传 --pfl，不依赖 run_exp1.py 的默认值。
+PFL="${PFL:-fedbn}"
 LISTDIR="$ROOT/results/lists"
 mkdir -p "$LISTDIR"
 LIST="$LISTDIR/exp1_${STAGE}_${PFL}.txt"

@@ -1,9 +1,11 @@
 #!/bin/bash
+#SBATCH -n 1
 #SBATCH -c 4
 #SBATCH --gpus 1
 #SBATCH -t 08:00:00
 #SBATCH -A naiss2026-4-650-gpu
 #SBATCH -p gpu
+#SBATCH --mem=24G
 #SBATCH --job-name=badpfl-exp1
 # ══════════════════════════════════════════════════════════════════════════
 # exp1_array.sbatch  —  Stage D 主力重跑：**一个 array task = 一个 run**。
