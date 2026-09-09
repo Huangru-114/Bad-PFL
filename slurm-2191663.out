@@ -1,3 +1,5 @@
+[env] python = apptainer exec --nv /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/torch_fl.sif python   (mode=apptainer)
+══ A | arm=fedbn | 总步数=15 | 头步数=- ══
 /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
   self.scaler = torch.cuda.amp.GradScaler()
 Files already downloaded and verified
@@ -12,3 +14,8 @@ Files already downloaded and verified
 [run_fl] mode=attack alpha=0.5 seed=0 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_probe_A_fedbn_s15
 [run_fl] 植入过程 30 行 -> results/raw/exp_ij_implantation_fedavg_attack_a0.5_s0_probe_A_fedbn_s15.csv
 [run_fl] 逐 edge 600 行 -> results/raw/exp_ij_edge_fedavg_attack_a0.5_s0_probe_A_fedbn_s15.csv
+[probe] A exit=0
+
+[probe] 读数：
+  python3 -m diag.read_calibration --results-dir results/raw --asr-col asr_paper_benign
+  （--asr-col 用 unfiltered 的论文口径，才能和 HANDOFF.md:325 的 0.9195 对读）
