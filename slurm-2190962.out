@@ -1,0 +1,44 @@
+[env] python = apptainer exec --nv /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/torch_fl.sif python   (mode=apptainer)
+══ B1 | arm=fedrep | 总步数=15 | 头步数=7 ══
+/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/client.py:15: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler()
+Files already downloaded and verified
+Files already downloaded and verified
+[PFL] fedrep | 私有=分类头 linear.* | BN 参与聚合 | 本地 7 步训头 + 8 步训 backbone
+[run_fl] 按轮次快照已开启：6 个网格点 × 12 个客户端 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_probe_B1_fedrep_s15/round_XXXX/
+[run_fl] 防御 = fedavg（为逐轮埋点接管聚合；与 agg_avg 数值等价）
+  0%|          | 0/300 [00:00<?, ?it/s]/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/utils.py:18: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+  0%|          | 1/300 [00:07<36:13,  7.27s/it]  1%|          | 2/300 [00:08<18:39,  3.76s/it]  1%|          | 3/300 [00:11<15:43,  3.18s/it]  1%|▏         | 4/300 [00:16<20:49,  4.22s/it]  2%|▏         | 5/300 [00:19<17:43,  3.60s/it]  2%|▏         | 6/300 [00:22<17:37,  3.60s/it]  2%|▏         | 7/300 [00:25<15:41,  3.21s/it]  3%|▎         | 8/300 [00:26<12:36,  2.59s/it]  3%|▎         | 9/300 [00:29<12:26,  2.56s/it]  3%|▎         | 9/300 [00:39<21:19,  4.40s/it]
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/run_fl.py", line 805, in <module>
+    raise SystemExit(main())
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/run_fl.py", line 783, in main
+    run_fl(cfg, args.mode, args.alpha, args.seed, smoke=args.smoke,
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/run_fl.py", line 577, in run_fl
+    basic_fl_process(server, clients, local_steps=local_steps,
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/fl_process.py", line 38, in basic_fl_process
+    fl_event_emitter.emit(event_name="on_round_end", cur_round=cur_round, server=server, clients=clients,
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/event_emitter.py", line 33, in emit
+    self._events[event_name].trigger(*args, **kwargs)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/event_emitter.py", line 14, in trigger
+    handler(*args, **kwargs)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/track.py", line 222, in _on_round_end
+    self._maybe_evaluate(server, clients)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/track.py", line 583, in _maybe_evaluate
+    self._evaluate_now(server, clients)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/track.py", line 619, in _evaluate_now
+    pm = self._fedrep_shared_pm(server, client)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/track.py", line 540, in _fedrep_shared_pm
+    model = get_resnet(size=self.model_size, num_classes=self.num_classes)
+NameError: name 'get_resnet' is not defined
+[run_fl] 快照清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/checkpoints/attack_a0.5_s0_probe_B1_fedrep_s15/snapshot_manifest.json（72 个 (客户端, 网格点) 组合里缺 72 个 = 覆盖 0.0%，见 manifest 的 'missing'）
+[probe] B1 exit=1
+
+[probe] 读数：
+  python3 -m diag.read_calibration --results-dir results/raw --asr-col asr_paper_benign
+  （--asr-col 用 unfiltered 的论文口径，才能和 HANDOFF.md:325 的 0.9195 对读）
