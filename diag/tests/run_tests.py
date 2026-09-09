@@ -52,6 +52,7 @@ TEST_MODULES = [
     "diag.tests.test_wall_clock",
     "diag.tests.test_read_calibration",
     "diag.tests.test_read_probe",
+    "diag.tests.test_name_resolution",
     "diag.tests.test_figstyle",
     "diag.tests.test_metrics_doc",
     "diag.tests.test_viz_trigger",

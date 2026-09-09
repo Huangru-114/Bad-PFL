@@ -533,6 +533,10 @@ class TrainingTracker:
         """
         if not hasattr(client, "_fedrep_head_steps"):
             return None
+        # `get_resnet` 在本模块是**函数内局部 import**（见 _evaluate_now:586 与
+        # 模块 docstring 的说明），不在模块作用域 —— 新方法必须自己 import。
+        from resnet import get_resnet
+
         from diag.pfl_fedrep import merge_shared_and_private
 
         merged = merge_shared_and_private(server.global_model.state_dict(),
