@@ -1,21 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=exp1_analysis
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
-#SBATCH --time=00:30:00
-#SBATCH --output=logs/analysis_exp1.log
+#SBATCH -n 1
+#SBATCH -c 4
+#SBATCH --gpus 1
+#SBATCH -t 24:00:00
+#SBATCH -A naiss2026-4-650-gpu
+#SBATCH -p gpu
+#SBATCH -J exp1_analysis
+#SBATCH -o logs/analysis_exp1.log
 
 # 在集群上生成 Exp1 的所有图表
 # 用法：sbatch diag/analysis_exp1.sbatch
 
 set -e
 
-cd "$(dirname "$0")/.."
+ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$ROOT"
 echo "[analysis] 工作目录: $(pwd)"
 
-# 加载容器环境
+# 加载集群环境（定义 $PY 变量）
 source diag/cluster_env.sh
-echo "[analysis] 容器环境已加载: $PYTHON_EXEC"
+echo "[analysis] Python 环境已就绪: $PY_MODE"
 
 OUT_DIR="results/figs"
 mkdir -p "$OUT_DIR"
@@ -30,7 +34,7 @@ if [ "$N_FILES" -lt 1 ]; then
 fi
 
 echo "[analysis] 步骤 2: 生成汇总统计与图表"
-$PYTHON_EXEC -m diag.analysis_exp1 \
+$PY -m diag.analysis_exp1 \
     --implantation-glob "results/raw/exp_ij_implantation_*_e1*.csv" \
     --out-dir "$OUT_DIR" \
     --summary-prefix "results/exp1" \
