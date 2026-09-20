@@ -1,0 +1,20 @@
+[env] python = python3   (mode=local)
+[submit] seed 缺省 <- config：0 1 2
+[submit] seeds = 0 1 2
+[submit] 生成清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/results/lists/exp1_1_fedbn.txt
+[submit] stage=1  pfl=fedbn
+=== 实验 1 / 1B：39 个 run ===
+  每个 run 200 轮 × 10×45 本地 batch = 90,000 个 batch
+  合计约 3,510,000 个本地 batch
+  每个 run 有 40 个 (MTA, ASR) 配对 —— ASR-vs-MTA 散点图的点数
+
+[list-only] 已输出 39 条命令到 stdout
+
+──────────────────────────────────────────────
+  清单长度 = 39 个 run（= 39 个 array task）
+  并发上限 = 4
+  单 run 成本：**由 Stage B 标定给出**（read_calibration 的 GPU-s→plat）
+  总机时 ≈ 39 × 单 run 成本
+──────────────────────────────────────────────
+
+diag/submit_exp1.sh: line 109: sbatch: command not found

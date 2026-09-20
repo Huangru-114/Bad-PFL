@@ -1,0 +1,25 @@
+[env] python = python3   (mode=local)
+[submit] seed 缺省 <- config：0 1 2 3 4
+[submit] seeds = 0 1 2 3 4
+[submit] 生成清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/results/lists/exp1_1_fedbn.txt
+[submit] stage=1  pfl=fedbn
+=== 实验 1 / 1B：65 个 run ===
+  每个 run 200 轮 × 10×45 本地 batch = 90,000 个 batch
+  合计约 5,850,000 个本地 batch
+  每个 run 有 40 个 (MTA, ASR) 配对 —— ASR-vs-MTA 散点图的点数
+
+[list-only] 已输出 65 条命令到 stdout
+
+──────────────────────────────────────────────
+  清单长度 = 65 个 run（= 65 个 array task）
+  并发上限 = 8
+  单 run 成本：**由 Stage B 标定给出**（read_calibration 的 GPU-s→plat）
+  总机时 ≈ 65 × 单 run 成本
+──────────────────────────────────────────────
+
+[submit] --dry-run：前 3 条命令 ——
+    python -m diag.run_fl --mode attack --alpha 0.5 --seed 0 --defense fedavg --client-num 100 --select-per-round 10 --local-steps 45 --model-size 10 --total-round 200 --eval-every 5 --eval-include-malicious --pfl fedbn --instrument-dir instrumentation --results-dir results/raw --ckpt-root ./checkpoints --bad-client-num 1 --poison-rate 0.1 --run-tag e1_bad1_rho0p1_s0
+    python -m diag.run_fl --mode attack --alpha 0.5 --seed 1 --defense fedavg --client-num 100 --select-per-round 10 --local-steps 45 --model-size 10 --total-round 200 --eval-every 5 --eval-include-malicious --pfl fedbn --instrument-dir instrumentation --results-dir results/raw --ckpt-root ./checkpoints --bad-client-num 1 --poison-rate 0.1 --run-tag e1_bad1_rho0p1_s1
+    python -m diag.run_fl --mode attack --alpha 0.5 --seed 2 --defense fedavg --client-num 100 --select-per-round 10 --local-steps 45 --model-size 10 --total-round 200 --eval-every 5 --eval-include-malicious --pfl fedbn --instrument-dir instrumentation --results-dir results/raw --ckpt-root ./checkpoints --bad-client-num 1 --poison-rate 0.1 --run-tag e1_bad1_rho0p1_s2
+    ...
+[submit] 未提交。去掉 --dry-run 即真正 sbatch。

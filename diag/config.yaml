@@ -124,7 +124,7 @@ exp1:
   # 十字扫描（`--stage 1`）已由 bad_nums × poison_rates + *_fixed 定义，
   # 这里只放它覆盖不到的两块。
   main:
-    seeds: [0, 1, 2, 3, 4]   # 5 seed —— 报告 Figure 3/5/9 此前全是 n=1
+    seeds: [0, 1, 2]   # 5 seed —— 报告 Figure 3/5/9 此前全是 n=1
     collapse_corner:         # 塌陷角补丁：ρ 高端 × Nm 高端，刻画塌陷的形状
       bad_nums: [4, 16, 32]
       poison_rates: [0.7, 0.9, 1.0]

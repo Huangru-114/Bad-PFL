@@ -1,0 +1,12 @@
+[env] python = python3   (mode=local)
+[submit] seed 缺省 <- config：0 1
+[submit] seeds = 0 1
+[submit] 生成清单 -> /nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/results/lists/exp1_--submit_fedbn.txt
+[submit] stage=--submit  pfl=fedbn
+usage: run_exp1.py [-h] [--config CONFIG] [--pfl {fedbn,fedrep}]
+                   [--stage {1,1b,persist,calib,corner,arm,all}]
+                   [--seeds [SEEDS ...]] [--full-grid] [--layer-metrics]
+                   [--instrument-root INSTRUMENT_ROOT]
+                   [--results-dir RESULTS_DIR] [--ckpt-root CKPT_ROOT]
+                   [--execute] [--list-only] [--skip-existing]
+run_exp1.py: error: argument --stage: expected one argument
