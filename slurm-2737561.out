@@ -1,0 +1,2 @@
+[analysis] 工作目录: /var/lib/slurm/slurmd
+/var/lib/slurm/slurmd/job2737561/slurm_script: line 18: diag/cluster_env.sh: No such file or directory
