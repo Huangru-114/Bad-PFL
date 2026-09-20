@@ -53,8 +53,8 @@ __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
            "onset_analysis", "dose_response", "dose_response_tiers",
            "persistence_table", "persistence_curves",
-           "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5", "plot_e1_6",
-           "plot_e1b_1", "plot_e1b_2", "main"]
+           "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5", "plot_acc_heatmap",
+           "plot_e1_6", "plot_e1b_1", "plot_e1b_2", "main"]
 
 ASR_COLUMN = "asr_personalized_targeted"
 MTA_COLUMN = "mta_personalized"
@@ -368,7 +368,7 @@ def persistence_curves(frame: pd.DataFrame,
 
 
 def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
-    """每个 (N_m, ρ_p, seed) 的尾部平均 ASR 与 MTA。"""
+    """每个 (N_m, ρ_p, seed) 的尾部平均 ASR、MTA 与 ACC。"""
     rows: List[Dict[str, Any]] = []
     for keys, group in frame.groupby(["bad_client_num", "poison_rate", "seed"]):
         group = group.sort_values("round")
@@ -380,6 +380,7 @@ def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
             "seed": int(keys[2]),
             "asr": float(block[ASR_COLUMN].mean()),
             "mta": float(block[MTA_COLUMN].mean()),
+            "acc_personalized": float(block["acc_personalized"].mean()),
             "n_tail": int(tail),
         })
     return pd.DataFrame(rows)
@@ -709,6 +710,49 @@ def plot_e1_5(response: pd.DataFrame, out_path) -> Path:
                    "Cells are the tail-mean ASR averaged over seeds.  Blank/'-' "
                    "cells were not run (cross sweep leaves them empty; a full "
                    "grid fills them).")
+
+
+def plot_acc_heatmap(response: pd.DataFrame, out_path) -> Path:
+    """ACC 热力图（N_m × ρ_p 的最终准确率）。
+
+    与 ASR 热力图对比，判断 ρ 效应的根本原因：
+    - 高 ρ 时 ASR↓ 但 ACC→1：真实现象（后门不稳定）
+    - 高 ρ 时 ASR↓ 且 ACC↓：虚假现象（主任务被破坏）
+    """
+    pivot = response.pivot_table(index="bad_client_num", columns="poison_rate",
+                                 values="acc_personalized", aggfunc="mean")
+    pivot = pivot.sort_index(ascending=True).sort_index(axis=1)
+    rows = [int(r) for r in pivot.index]
+    cols = [float(c) for c in pivot.columns]
+    data = pivot.to_numpy(dtype=float)
+
+    fig, axis = plt.subplots(figsize=(1.4 * len(cols) + 2.6,
+                                      0.7 * len(rows) + 2.2))
+    mesh = axis.imshow(data, origin="lower", aspect="auto", cmap="RdYlGn",
+                       vmin=0.0, vmax=1.0)
+    axis.set_xticks(range(len(cols)))
+    axis.set_xticklabels([f"{c:g}" for c in cols])
+    axis.set_yticks(range(len(rows)))
+    axis.set_yticklabels([str(r) for r in rows])
+    axis.set_xlabel(pretty_label("poison_rate"))
+    axis.set_ylabel(pretty_label("bad_client_num"))
+    # 每格标数值
+    for i in range(len(rows)):
+        for j in range(len(cols)):
+            value = data[i, j]
+            if np.isfinite(value):
+                axis.text(j, i, f"{value:.2f}", ha="center", va="center",
+                          fontsize=8,
+                          color="white" if value < 0.55 else "black")
+            else:
+                axis.text(j, i, "-", ha="center", va="center", fontsize=8,
+                          color="0.6")
+    fig.colorbar(mesh, ax=axis, shrink=0.85,
+                 label="Clean accuracy (personalized model, tail mean)")
+    axis.set_title("ACC Heatmap  (personalized model accuracy over Nm x rho grid)")
+    return _finish(fig, out_path,
+                   "Diagnostic: Compare with ASR heatmap. If high-rho ASR↓ but ACC~1, "
+                   "backdoor is unstable (real). If both ASR↓ and ACC↓, main task is broken (fake).")
 
 
 def plot_e1_6(tiers: pd.DataFrame, out_path) -> Path:
@@ -1050,6 +1094,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not response.empty:
         figures.append(plot_e1_4(response, out_dir / "exp1_E4_dose_response.png"))
         figures.append(plot_e1_5(response, out_dir / "exp1_E5_dose_heatmap.png"))
+        figures.append(plot_acc_heatmap(response, out_dir / "exp1_ACC_heatmap.png"))
     # E1-6：三档 ASR 并列（把 asr_paper_all 的平均伪影摊开）
     tiers = dose_response_tiers(core, tail=args.tail)
     tiers.to_csv(f"{prefix}_asr_tiers.csv", index=False)
