@@ -32,9 +32,10 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import csv
 import sys
 import subprocess
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pathlib import Path
 
@@ -161,6 +162,65 @@ def csv_has_paper_column(path: str) -> bool:
     except OSError:
         return False
     return "asr_paper_all" in [c.strip() for c in header.split(",")]
+
+
+#: ``--skip-existing`` 复用一个 CSV 之前要核对的配置，以及它对应的命令行开关。
+_CONFIG_FLAGS = {"local_steps": "--local-steps",
+                 "total_round": "--total-round",
+                 "pfl": "--pfl"}
+
+
+def csv_config_mismatch(path: str, cmd: Sequence[str]) -> str:
+    """CSV 记录的训练配置与这条命令不符时，返回一句人话；相符返回 ``""``。
+
+    **为什么光看列名不够**：``csv_has_paper_column`` 只问"有没有 asr_paper_all"。
+    2026-09-09 把 exp1 从 15 步改到 45 步（`a7c7d28`）之后，旧的 15 步 CSV
+    照样带着那一列，于是 ``--skip-existing`` 会把它当成"已经跑过了"直接跳过，
+    旧配置的数就这样留在新网格里 —— MTA 低 0.14，而表上看不出来。
+
+    配置从 2026-09 起逐行写进 CSV（track.py 的 IMPLANTATION_COLUMNS），所以
+    只读表头 + 第一行数据就够，不依赖 pandas，也不用去猜 ckpt 目录在哪。
+    没有这几列的 CSV（旧 run）一律判为不符 —— 无法核对就重跑，不赌。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            first = next(reader, None)
+    except OSError:
+        return "读不到文件"
+    if not header or not first:
+        return "空表"
+    row = dict(zip([c.strip() for c in header], first))
+
+    for column, flag in _CONFIG_FLAGS.items():
+        if column not in row:
+            return (f"CSV 里没有 {column} 列（2026-09 之前的 run，"
+                    f"核对不了配置）")
+        want = _cmd_str(cmd, flag)
+        if want is None:
+            continue                      # 这条命令没显式指定 → 无从比较
+        got = str(row[column]).strip()
+        if column == "pfl":
+            if got.lower() != want.lower():
+                return f"{column}: CSV={got} 命令={want}"
+            continue
+        try:
+            if int(float(got)) != int(float(want)):
+                return f"{column}: CSV={got} 命令={want}"
+        except ValueError:
+            return f"{column}: CSV={got!r} 解析不出数字"
+    return ""
+
+
+def csv_is_reusable(path: str, cmd: Sequence[str]) -> Tuple[bool, str]:
+    """``--skip-existing`` 的判据：论文口径列齐 **且** 配置一致才复用。"""
+    if not csv_has_paper_column(path):
+        return False, "没有 asr_paper_all 列"
+    mismatch = csv_config_mismatch(path, cmd)
+    if mismatch:
+        return False, mismatch
+    return True, ""
 
 
 def build_commands(cfg: Cfg, stage: str = "all", *,
@@ -374,6 +434,14 @@ def build_commands(cfg: Cfg, stage: str = "all", *,
     return jobs
 
 
+def _cmd_str(cmd: Sequence[str], flag: str) -> Optional[str]:
+    """从生成好的命令里读一个参数；命令没带这个开关时返回 ``None``。"""
+    try:
+        return str(cmd[list(cmd).index(flag) + 1])
+    except (ValueError, IndexError):
+        return None
+
+
 def _cmd_int(cmd: Sequence[str], flag: str, default: int) -> int:
     """从生成好的命令里读一个整数参数。"""
     try:
@@ -464,8 +532,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "供 SLURM job array 用 `sed -n \"${SLURM_ARRAY_TASK_ID}p\"` "
                              "取第 N 条。与 --execute 互斥。")
     parser.add_argument("--skip-existing", action="store_true",
-                        help="跳过植入 CSV 已带论文口径列 asr_paper_all 的 run —— "
-                             "省机时。旧口径（无该列）的 CSV 仍会重跑。")
+                        help="跳过 CSV 已带论文口径列 asr_paper_all **且** "
+                             "local_steps / total_round / pfl 与本条命令一致的 "
+                             "run —— 省机时。旧口径（无该列）、旧配置、以及"
+                             "根本没记配置的 CSV 都会重跑。")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -503,13 +573,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  ⚠️ 最少的那个 run 只有 {cost['asr_mta_points_per_run']} 个配对，"
               f"散点图上看不出转折。把 eval_every 调小。")
 
-    # --skip-existing：把已带论文口径列的 run 标记出来，不再重训
+    # --skip-existing：只跳过「论文口径列齐 **且** 配置与本条命令一致」的 run。
+    # 光看列名会把 2026-09-09 之前的 15 步 CSV 当成跑过了（见 csv_config_mismatch）。
     if args.skip_existing:
+        reasons: Dict[str, int] = {}
         for job in jobs:
-            job["skip"] = csv_has_paper_column(job.get("csv", ""))
+            reusable, why = csv_is_reusable(job.get("csv", ""), job["cmd"])
+            job["skip"] = reusable
+            if not reusable:
+                reasons[why] = reasons.get(why, 0) + 1
         n_skip = sum(1 for j in jobs if j.get("skip"))
-        print(f"  [--skip-existing] {n_skip}/{len(jobs)} 个 run 的 CSV 已带 "
-              f"asr_paper_all，将跳过；实跑 {len(jobs) - n_skip} 个。")
+        print(f"  [--skip-existing] {n_skip}/{len(jobs)} 个 run 的 CSV 可复用"
+              f"（列齐且配置一致），将跳过；实跑 {len(jobs) - n_skip} 个。")
+        for why, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            print(f"      重跑 {count} 个 —— {why}")
 
     if args.list_only:
         # stdout：一行一条命令，**不带**注释/标记，跳过的也照常列出 ——
@@ -522,7 +599,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print()
     for job in jobs:
         note = f"   # {job['describe']}" if "describe" in job else ""
-        flag = "  [SKIP: 已有 asr_paper_all]" if job.get("skip") else ""
+        flag = "  [SKIP: CSV 已存在且配置一致]" if job.get("skip") else ""
         print(" ".join(job["cmd"]) + note + flag)
 
     if not args.execute:

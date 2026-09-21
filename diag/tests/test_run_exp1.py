@@ -15,7 +15,8 @@ from pathlib import Path as _P
 
 ROOT = _P(__file__).resolve().parent.parent.parent
 
-from diag.run_exp1 import csv_has_paper_column, implantation_csv
+from diag.run_exp1 import (csv_config_mismatch, csv_has_paper_column,
+                           csv_is_reusable, implantation_csv)
 
 
 def test_implantation_csv_matches_run_fl_naming():
@@ -45,6 +46,88 @@ def test_csv_has_paper_column_ignores_substring_false_positives():
         partial = Path(tmp) / "partial.csv"
         partial.write_text("round,asr_paper_benign,asr_paper_malicious\n5,0.2,1.0\n")
         assert csv_has_paper_column(str(partial)) is False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# --skip-existing 的配置核对
+#
+# 这组是为一个实际发生过的事故加的：2026-09-09 把 exp1 从 15 步改到 45 步
+# （a7c7d28）之后，旧的 15 步 CSV 照样带着 asr_paper_all 列，于是会被判成
+# "跑过了"。旧配置的数就这样留在新网格里，只能靠 MTA 低 0.14 事后察觉。
+# ──────────────────────────────────────────────────────────────────────────
+_HEADER = "round,seed,local_steps,total_round,pfl,asr_paper_all\n"
+
+
+def _write_csv(path, *, steps=45, rounds=200, pfl="fedbn"):
+    path.write_text(_HEADER + f"5,0,{steps},{rounds},{pfl},0.8\n")
+    return str(path)
+
+
+_CMD45 = ["python", "-m", "diag.run_fl", "--local-steps", "45",
+          "--total-round", "200", "--pfl", "fedbn"]
+
+
+def test_matching_configuration_is_reusable():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_csv(Path(tmp) / "ok.csv")
+        assert csv_config_mismatch(path, _CMD45) == ""
+        assert csv_is_reusable(path, _CMD45) == (True, "")
+
+
+def test_stale_local_steps_forces_a_rerun():
+    """15 步的旧 CSV 不能因为"有 asr_paper_all"就被当成跑过了。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_csv(Path(tmp) / "stale.csv", steps=15)
+        assert csv_has_paper_column(path) is True      # 旧判据会放过它
+        reusable, why = csv_is_reusable(path, _CMD45)
+        assert reusable is False and "local_steps" in why
+
+
+def test_stale_total_round_forces_a_rerun():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_csv(Path(tmp) / "stale.csv", rounds=300)
+        assert csv_is_reusable(path, _CMD45)[0] is False
+
+
+def test_other_pfl_arm_forces_a_rerun():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_csv(Path(tmp) / "fedrep.csv", pfl="fedrep")
+        reusable, why = csv_is_reusable(path, _CMD45)
+        assert reusable is False and "pfl" in why
+
+
+def test_csv_without_config_columns_is_never_reused():
+    """核对不了就重跑 —— 不赌"应该是同一套配置吧"。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "old.csv"
+        path.write_text("round,seed,asr_paper_all\n5,0,0.8\n")
+        reusable, why = csv_is_reusable(str(path), _CMD45)
+        assert reusable is False and "local_steps" in why
+
+
+def test_missing_and_empty_files_are_not_reusable():
+    with tempfile.TemporaryDirectory() as tmp:
+        assert csv_is_reusable(str(Path(tmp) / "nope.csv"), _CMD45)[0] is False
+        empty = Path(tmp) / "empty.csv"
+        empty.write_text(_HEADER)                      # 只有表头，没有数据行
+        assert csv_config_mismatch(str(empty), _CMD45) == "空表"
+
+
+def test_flags_absent_from_the_command_are_not_compared():
+    """命令没显式给 --pfl 时，不能凭空判定不符而把整批都重跑。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write_csv(Path(tmp) / "ok.csv")
+        cmd = ["python", "-m", "diag.run_fl", "--local-steps", "45",
+               "--total-round", "200"]
+        assert csv_config_mismatch(path, cmd) == ""
+
+
+def test_float_valued_steps_still_compare_equal():
+    """CSV 里 local_steps 被写成 45.0 时不能判成不符（pandas 会把整列变 float）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "float.csv"
+        path.write_text(_HEADER + "5,0,45.0,200.0,fedbn,0.8\n")
+        assert csv_config_mismatch(str(path), _CMD45) == ""
 
 # ══════════════════════════════════════════════════════════════════════════
 # PFL 臂（fedbn / fedrep）—— 两条臂的产物必须互不覆盖

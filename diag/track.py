@@ -85,6 +85,12 @@ IMPLANTATION_COLUMNS = [
     "round", "defense", "bad_client_num", "poison_rate",
     "schedule", "attack_active_this_round",
     "tau", "alpha", "alpha_dirichlet", "seed", "variant",
+    # 产生这一行的**训练配置**。以前只写进 ckpt 的 meta.json（run_fl.py 的
+    # `meta`），而分析端读的是 CSV —— 于是 15 步旧 run 与 45 步新 run 在表里
+    # 长得一模一样，只能靠 MTA 高低事后猜。2026-09 的全网格就因此混进了
+    # `e1_bad{1,2,8}_rho0p5_s1` 三个 15 步遗留 run（见 HANDOFF "污染" 一节）。
+    # 有了这四列，analysis_exp1.load_runs 能在并表时直接拒绝混配置。
+    "local_steps", "total_round", "pfl", "client_num",
     "acc_global", "acc_global_raw", "acc_personalized",
     "asr_global_targeted", "asr_personalized_targeted", "asr_unfiltered",
     # 论文口径 ASR（原始 full_poison_func，各客户端自己 test loader，不过滤）。
@@ -163,6 +169,13 @@ class TrainingTracker:
     bad_client_num: int = -1
     poison_rate: float = float("nan")
     schedule_kind: str = "continuous"
+    # 产生这批行的训练配置，逐行写进植入 CSV（见 IMPLANTATION_COLUMNS 的注释）。
+    # −1 / "" 表示调用方没传 —— 下游据此判为"旧 run，无法核对配置"，
+    # 而不是当成某个具体取值。
+    local_steps: int = -1
+    total_round: int = -1
+    pfl: str = ""
+    client_num: int = -1
     # 逐层指标要多扫一遍全部 key（ResNet-18 上约 60 个），默认关闭
     layer_metrics: bool = False
     eval_every: int = 0
@@ -789,6 +802,10 @@ class TrainingTracker:
             "tau": self.tau, "alpha": self.trim_alpha,
             "alpha_dirichlet": self.alpha_dirichlet, "seed": self.seed,
             "variant": self.variant or self.defense_name,
+            "local_steps": int(self.local_steps),
+            "total_round": int(self.total_round),
+            "pfl": str(self.pfl),
+            "client_num": int(self.client_num),
             "acc_global": global_row["acc"],
             "acc_global_raw": acc_global_raw,
             "acc_personalized": _mean("acc"),

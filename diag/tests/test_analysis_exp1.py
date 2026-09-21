@@ -12,12 +12,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from diag.analysis_exp1 import (crossing_table, dose_response,
-                                dose_response_tiers, load_runs, onset_analysis,
-                                persistence_curves, persistence_table,
-                                plot_e1_1, plot_e1_2, plot_e1_4, plot_e1_5,
-                                plot_e1_6, plot_e1b_1, plot_e1b_2,
-                                resolve_asr_column, threshold_verdict)
+from diag.analysis_exp1 import (assert_single_configuration, crossing_table,
+                                dose_response, dose_response_tiers, load_runs,
+                                onset_analysis, persistence_curves,
+                                persistence_table, plot_e1_1, plot_e1_2,
+                                plot_e1_4, plot_e1_5, plot_e1_6, plot_e1b_1,
+                                plot_e1b_2, resolve_asr_column,
+                                runs_without_the_asr_column, select_dose_grid,
+                                threshold_verdict)
 
 
 def _run(run_id, *, bad=4, rho=0.5, seed=0, schedule="continuous",
@@ -231,6 +233,164 @@ def test_dose_response_skips_runs_shorter_than_the_tail():
     frame = _run("a", rounds=[10], asr=np.array([0.5]), mta=np.array([0.5]),
                  active=[True])
     assert dose_response(frame, tail=5).empty
+
+
+# ---------------------------------------------------------------------------
+# 一格 = 一个 run
+#
+# 这组守的是 2026-09 全网格那次事故：交叉点 (Nm=4, ρ=0.1) 上同时坐着剂量网格、
+# 1B 的 6 个调度跑、Stage B 的 3 个标定跑和 4 个 FedRep 标定跑，共 14 个 run。
+# 旧实现按 (Nm, ρ, seed) 归组后取"轮次最大的 3 行"，于是那一格是十几个 run 的
+# 混合，而且取到谁取决于文件读入顺序 —— 表上完全看不出来。
+# ---------------------------------------------------------------------------
+def test_two_runs_in_one_cell_raise_instead_of_being_averaged():
+    grid = _run("e1_bad4_rho0p1_s0", bad=4, rho=0.1, seed=0,
+                rounds=[190, 195, 200], asr=np.array([0.9, 0.9, 0.9]))
+    calib = _run("e1calib_steps15_s0", bad=4, rho=0.1, seed=0,
+                 rounds=[140, 145, 150], asr=np.array([0.2, 0.2, 0.2]))
+    frame = pd.concat([grid, calib], ignore_index=True)
+    raised = None
+    try:
+        dose_response(frame, tail=3)
+    except ValueError as error:
+        raised = str(error)
+    assert raised is not None
+    assert "e1calib_steps15_s0" in raised and "e1_bad4_rho0p1_s0" in raised
+
+
+def test_tiers_raise_on_the_same_collision():
+    frame = pd.concat([
+        _run("e1_bad4_rho0p1_s0", bad=4, rho=0.1, rounds=[190, 195, 200]),
+        _run("e1b_schedcontinuous_s0", bad=4, rho=0.1, rounds=[190, 195, 200]),
+    ], ignore_index=True)
+    for name in ("asr_paper_benign", "asr_paper_all", "asr_paper_malicious"):
+        frame[name] = 0.5
+    raised = None
+    try:
+        dose_response_tiers(frame, tail=3)
+    except ValueError as error:
+        raised = str(error)
+    assert raised is not None and "e1b_schedcontinuous_s0" in raised
+
+
+def test_select_dose_grid_keeps_only_tags_that_carry_the_dose():
+    frame = pd.concat([
+        _run("fedavg_attack_a0.5_s0_e1_bad4_rho0p1_s0", bad=4, rho=0.1),
+        _run("fedavg_attack_a0.5_s0_e1_bad16_rho1p0_s0", bad=16, rho=1.0),
+        _run("fedavg_attack_a0.5_s0_e1b_schedburst_s0", bad=4, rho=0.1),
+        _run("fedavg_attack_a0.5_s0_e1calib_steps45_s0", bad=4, rho=0.1),
+        _run("fedavg_attack_a0.5_s0_e1calib_fedrep_steps117_s0", bad=4, rho=0.1),
+    ], ignore_index=True)
+    grid, dropped = select_dose_grid(frame)
+    assert set(grid["run_id"]) == {"fedavg_attack_a0.5_s0_e1_bad4_rho0p1_s0",
+                                   "fedavg_attack_a0.5_s0_e1_bad16_rho1p0_s0"}
+    assert len(dropped) == 3          # 被排除的要报出来，不能悄悄丢
+
+
+def test_select_dose_grid_resolves_the_collision():
+    """挑完网格之后，交叉点那一格就只剩一个 run，剂量表才算得出来。"""
+    frame = pd.concat([
+        _run("fedavg_attack_a0.5_s0_e1_bad4_rho0p1_s0", bad=4, rho=0.1,
+             rounds=[190, 195, 200], asr=np.array([0.9, 0.9, 0.9])),
+        _run("fedavg_attack_a0.5_s0_e1calib_steps15_s0", bad=4, rho=0.1,
+             rounds=[140, 145, 150], asr=np.array([0.2, 0.2, 0.2])),
+    ], ignore_index=True)
+    grid, _ = select_dose_grid(frame)
+    table = dose_response(grid, tail=3)
+    assert len(table) == 1
+    assert np.isclose(float(table["asr"].iloc[0]), 0.9)
+
+
+def test_dose_response_records_which_run_each_cell_came_from():
+    table = dose_response(_run("e1_bad4_rho0p5_s0", rounds=[190, 195, 200]),
+                          tail=3)
+    assert table["run_id"].iloc[0] == "e1_bad4_rho0p5_s0"
+
+
+# ---------------------------------------------------------------------------
+# 混配置拒绝并表
+# ---------------------------------------------------------------------------
+def _with_config(frame, *, steps=45, rounds=200, pfl="fedbn", source="a.csv"):
+    frame = frame.copy()
+    frame["local_steps"] = steps
+    frame["total_round"] = rounds
+    frame["pfl"] = pfl
+    frame["client_num"] = 100
+    frame["source_file"] = source
+    return frame
+
+
+def test_same_configuration_passes():
+    frame = pd.concat([
+        _with_config(_run("a"), source="a.csv"),
+        _with_config(_run("b"), source="b.csv"),
+    ], ignore_index=True)
+    assert assert_single_configuration(frame) == ""
+
+
+def test_mixed_local_steps_are_refused():
+    """15 步的遗留 run 与 45 步的新 run 之间连 MTA 都不可比。"""
+    frame = pd.concat([
+        _with_config(_run("new"), steps=45, source="new.csv"),
+        _with_config(_run("stale"), steps=15, source="stale.csv"),
+    ], ignore_index=True)
+    raised = None
+    try:
+        assert_single_configuration(frame)
+    except ValueError as error:
+        raised = str(error)
+    assert raised is not None
+    assert "local_steps" in raised and "stale.csv" in raised
+
+
+def test_a_file_without_the_config_columns_conflicts_with_one_that_has_them():
+    new = _with_config(_run("new"), source="new.csv")
+    old = _run("old")
+    old["source_file"] = "old.csv"        # 旧 run：没有 local_steps 等列
+    frame = pd.concat([new, old], ignore_index=True)
+    raised = None
+    try:
+        assert_single_configuration(frame)
+    except ValueError as error:
+        raised = str(error)
+    assert raised is not None and "old.csv" in raised
+
+
+def test_uniformly_missing_config_columns_only_warn():
+    """全是旧 run 时核对不了，但不该把整个分析拦死 —— 出提示语放行。"""
+    frame = _run("old")
+    frame["source_file"] = "old.csv"
+    note = assert_single_configuration(frame)
+    assert note and "local_steps" in note
+
+
+def test_runs_whose_asr_column_is_entirely_empty_are_named():
+    """旧 run 的 ASR 列整列 nan，而 MTA 照常进表 —— 必须点名，不能默默混着。"""
+    new = _run("e1_bad4_rho0p1_s0", rounds=[190, 195, 200])
+    new["asr_paper_filtered_benign"] = 0.9
+    old = _run("e1_bad1_rho0p5_s1", bad=1, rho=0.5, seed=1,
+               rounds=[190, 195, 200])
+    old["asr_paper_filtered_benign"] = np.nan      # 旧代码没有这一列
+    frame = pd.concat([new, old], ignore_index=True)
+    assert runs_without_the_asr_column(
+        frame, "asr_paper_filtered_benign") == ["e1_bad1_rho0p5_s1"]
+
+
+def test_runs_without_the_asr_column_is_empty_when_the_column_is_absent():
+    assert runs_without_the_asr_column(_run("a"), "asr_paper_filtered_benign") == []
+
+
+def test_fedbn_and_fedrep_arms_never_share_a_table():
+    frame = pd.concat([
+        _with_config(_run("bn"), pfl="fedbn", source="bn.csv"),
+        _with_config(_run("rep"), pfl="fedrep", source="rep.csv"),
+    ], ignore_index=True)
+    raised = None
+    try:
+        assert_single_configuration(frame)
+    except ValueError as error:
+        raised = str(error)
+    assert raised is not None and "pfl" in raised
 
 
 # ---------------------------------------------------------------------------

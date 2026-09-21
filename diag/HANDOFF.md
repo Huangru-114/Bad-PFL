@@ -9,6 +9,61 @@
 
 ---
 
+## 0''. 2026-09-21 全网格的汇总表不可用 —— 三处污染与已做的修复
+
+`9765773` 上传的全网格（Nm∈{1,2,4,8,16,32} × ρ∈{0,0.1,0.25,0.3,0.5,0.7,0.9,1.0}
+seed 0，加 Nm=4 行与 ρ=0.1 列的 3 seed）**训练本身没问题，坏的是汇总环节**。
+`results/exp1_dose_response.csv` 与 `results/exp1_asr_tiers.csv` 在修复前生成，
+**重跑一次 `analysis_exp1` 才可用**（不需要重训）。
+
+### 症状与根因
+
+1. **交叉点被 14 个 run 混成一格**。`bad_num_fixed=4 / poison_rate_fixed=0.1`
+   是配置里的交叉点，1B 的 6 个调度跑、Stage B 的 3 个标定跑、4 个 FedRep
+   标定跑**全都坐在这个坐标上**。而剂量表按 (N_m, ρ_p, seed) 归组后取"轮次最大
+   的 tail 行"，于是那一格是十几个 run 的混合，取到谁取决于文件读入顺序。
+   自证据：同一格 `dose_response` 读出 filtered benign **0.969**、`tiers` 读出
+   unfiltered benign **0.291** —— unfiltered 只可能**高于** filtered 约 10 个
+   百分点。`tiers` 当时传的还是 `core`（连 burst/late 都算进去），
+   `dose_response` 传的是 `stage1`，两张表在同一格上读的不是同一批行。
+2. **三个 15 步的遗留 run 混进了 45 步的网格**：`e1_bad{1,2,8}_rho0p5_s1`。
+   它们的 MTA 0.507/0.554/0.558 落在标定表 15 步那档（150 轮 0.5081），
+   而当前配置每一格都是 0.68–0.71；`n_active_eval_rounds=40` → 200 轮 /
+   eval_every=5，与 `8ada485` 时代的 `total_round: 200 + local_steps: 15` 一致；
+   同时缺 `asr_paper_filtered_*`（后加的列）→ ASR 空、MTA/ACC 照常进表。
+   `a7c7d28`（2026-09-09）才把 exp1 改到 45 步。
+3. **谁都拦不住**：植入 CSV 不记 `local_steps/total_round/pfl`（只写进 ckpt 的
+   meta.json），`--skip-existing` 只看表头有没有 `asr_paper_all`，
+   `load_runs` 只校验 7 个必需列。三道关都看不见配置。
+
+### 已修（本次提交）
+
+- `track.py`：`local_steps / total_round / pfl / client_num` 逐行写进植入 CSV。
+- `analysis_exp1.assert_single_configuration`：并表时这几列必须唯一，
+  混配置直接 `ValueError` 并列出冲突文件。整列缺失（旧 run）只提示、放行。
+- `analysis_exp1.select_dose_grid`：剂量网格 = tag 里带剂量的那一族
+  （`_bad<N>_rho<R>_s<S>`），调度跑/标定跑一律排除并逐条打印。
+  实测在现有数据上：保留 72 个 run、排除 19 个、**碰撞格子 0**。
+- `_tail_block_per_run`：先按 run 取尾再归格；同坐标多 run **报错不平均**。
+  `dose_response` / `dose_response_tiers` 共用它，且都用同一个 `stage1` 帧。
+  两张表各多一列 `run_id`，记下这一格出自哪个 run。
+- `run_exp1.csv_is_reusable`：`--skip-existing` 改成"论文口径列齐 **且**
+  配置与本条命令一致"，并打印每类重跑原因。核对不了的一律重跑。
+- `analysis_exp1.runs_without_the_asr_column`：选定 ASR 列整列为空的 run
+  逐条点名（在 CSV 还没有配置列的过渡期，这是唯一能察觉混入的信号）。
+
+### 还要做的（未做）
+
+- **把 `results/raw/` 里 4 个 `*_rho0p5_s1` 的旧文件移走或重跑**
+  （`e1_bad{1,2,8,4}_rho0p5_s1`）。现有 CSV 都还没有配置列，
+  `assert_single_configuration` 这一关对它们是"核对不了→放行"。
+- 重跑一次 `analysis_exp1`，替换那两张汇总表；交叉点那一格数值会变（修 bug）。
+- E5/ACC 热力图仍在 `aggfunc="mean"` 跨 seed 平均，**单 seed 的格子照样上色**。
+  实测 Nm=4 的 ρ=0.7/0.9 三 seed 极差 0.74/0.60 —— 单 seed 内部格子不含信息。
+  改成"≥3 seed 才上色"是口径决定，等确认后再动。
+
+---
+
 ## 0'. 新增：与 tf-dpfl 对齐的能力（2026-09-07）
 
 导师意见触发的一轮口径/框架对齐。**两件都不改既有列与既有行为**，

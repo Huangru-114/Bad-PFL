@@ -482,6 +482,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             poison_rate=float(poison_rate) if mode == "attack" else 0.0,
             schedule_kind=schedule.kind, layer_metrics=bool(layer_metrics),
             model_size=model_size,
+            # 训练配置逐行写进 CSV —— 分析端据此拒绝把不同配置的 run 并进一张表。
+            # 这几个值同时也写进 meta.json（下面第 8 节），两处必须一致。
+            local_steps=int(local_steps), total_round=int(total_round),
+            pfl=str(pfl_method), client_num=int(client_num),
             eval_every=int(eval_every),
             eval_client_ids=benign_ids[:n_eval],
             # 正对照：恶意客户端**自己**的模型是被投毒的，其 ASR 应当很高。

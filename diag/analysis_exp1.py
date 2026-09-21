@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import glob as globlib
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -51,6 +52,8 @@ from .figstyle import (apply_publication_style, asr_axis_label,
 
 __all__ = ["load_runs", "run_key", "crossing_table", "threshold_verdict",
            "restrict_to_common_dose", "resolve_asr_column",
+           "assert_single_configuration", "select_dose_grid",
+           "runs_without_the_asr_column",
            "onset_analysis", "dose_response", "dose_response_tiers",
            "persistence_table", "persistence_curves",
            "plot_e1_1", "plot_e1_2", "plot_e1_4", "plot_e1_5", "plot_acc_heatmap",
@@ -84,6 +87,79 @@ def resolve_asr_column(frame: pd.DataFrame, chosen: str) -> Tuple[str, str]:
         f"ASR 列。可用列：{sorted(frame.columns)}")
 
 
+#: 逐行写进 CSV 的训练配置（track.py 的 IMPLANTATION_COLUMNS）。并表时这几列
+#: 必须整张表唯一 —— 不唯一就说明把不同配置的 run 并进了一张表。
+CONFIG_COLUMNS = ("local_steps", "total_round", "pfl", "client_num")
+
+
+def assert_single_configuration(frame: pd.DataFrame) -> str:
+    """并进来的 run 必须出自同一套训练配置，否则抛 ``ValueError``。
+
+    ``local_steps`` 这类字段直到 2026-09 才进 CSV（在那之前只在 ckpt 的
+    meta.json 里），所以**整列缺失**只算"核对不了"，打一行提示放行；一旦有些
+    文件带、有些不带，或带了但取值不同，就是新旧配置混表 —— 那必须拦住。
+
+    这是为一个实际发生过的事故加的守卫：2026-09 的全网格里混进了三个
+    2026-09-09 之前的 15-step 遗留 run（``e1_bad{1,2,8}_rho0p5_s1``），
+    它们的 MTA 比同表其余格子低 0.14，而表上看不出任何差别。
+    """
+    conflicts: List[str] = []
+    notes: List[str] = []
+    # load_runs 一定会写 source_file；直接拿一张拼好的帧来调用时退回 run_id，
+    # 好让报错里指得出是"哪一批"而不是只说一句冲突。
+    by = "source_file" if "source_file" in frame.columns else "run_id"
+    for column in CONFIG_COLUMNS:
+        if column not in frame.columns:
+            notes.append(column)
+            continue
+        # 逐文件取值；整列没有该字段的旧 CSV 在 concat 后是 nan，用 None 表示
+        # "这个文件没写"，好让"有的写了有的没写"也算冲突。
+        per_file: Dict[Any, List[str]] = {}
+        for source, group in frame.groupby(by):
+            values = group[column].dropna().unique()
+            key = values[0] if len(values) == 1 else (
+                None if len(values) == 0 else tuple(sorted(map(str, values))))
+            per_file.setdefault(key, []).append(str(source))
+        if len(per_file) > 1:
+            lines = [f"  {column}:"]
+            for key, files in sorted(per_file.items(), key=lambda kv: str(kv[0])):
+                shown = ", ".join(sorted(files)[:4])
+                more = f" (+{len(files) - 4} 个)" if len(files) > 4 else ""
+                lines.append(f"    {key if key is not None else '未记录（旧 run）'}"
+                             f" <- {shown}{more}")
+            conflicts.append("\n".join(lines))
+    if conflicts:
+        raise ValueError(
+            "同一张表里混进了不同训练配置的 run，**拒绝并表**：\n"
+            + "\n".join(conflicts)
+            + "\n把旧配置的 CSV 从结果目录移走，或用更窄的 --implantation-glob。"
+              "\n（这不是可以放宽的检查：配置不同的 run 之间连 MTA 都不可比。）")
+    if notes:
+        return (f"⚠️ CSV 里没有 {', '.join(notes)} 列，**无法核对这批 run 是不是"
+                f"同一套配置**。这是 2026-09 之前的 run；重跑后才有。")
+    return ""
+
+
+def runs_without_the_asr_column(frame: pd.DataFrame, column: str) -> List[str]:
+    """选定的 ASR 列整列为空的 run。
+
+    这是"旧代码跑出来的 run 混进了新表"最直接的症状：``asr_paper_filtered_*``
+    是后加的列，旧 run 没有它，concat 之后整列 nan。而 ``dose_response`` 的
+    ``mean()`` 默认 skipna，于是那一格 ASR 空、MTA/ACC 却照常从旧配置的行里
+    算出来 —— 两者混在一张表上，看不出任何异样。
+
+    ``CONFIG_COLUMNS`` 齐了之后这件事由 ``assert_single_configuration`` 直接拦住；
+    在那之前（2026-09 之前的 run 都没有那几列）这是唯一能察觉它的信号。
+    """
+    if column not in frame.columns:
+        return []
+    empty: List[str] = []
+    for run_id, group in frame.groupby("run_id"):
+        if not bool(np.isfinite(group[column]).any()):
+            empty.append(str(run_id))
+    return sorted(empty)
+
+
 def load_runs(pattern: str) -> pd.DataFrame:
     """读入植入 CSV。剂量与调度都是**列**，不从文件名解析。"""
     paths = sorted(globlib.glob(pattern))
@@ -106,7 +182,11 @@ def load_runs(pattern: str) -> pd.DataFrame:
         frames.append(frame)
     if not frames:
         raise ValueError(f"匹配到 {len(paths)} 个文件，但全是空表")
-    return pd.concat(frames, ignore_index=True)
+    merged = pd.concat(frames, ignore_index=True)
+    note = assert_single_configuration(merged)
+    if note:
+        print(f"[analysis_exp1] {note}")
+    return merged
 
 
 def run_key(row: pd.Series) -> str:
@@ -367,14 +447,71 @@ def persistence_curves(frame: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
-def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
-    """每个 (N_m, ρ_p, seed) 的尾部平均 ASR、MTA 与 ACC。"""
-    rows: List[Dict[str, Any]] = []
-    for keys, group in frame.groupby(["bad_client_num", "poison_rate", "seed"]):
+#: stage-1 剂量网格的 run tag：剂量编在 tag 里（``e1_bad4_rho0p1_s0``）。
+#: 1B 的调度跑（``e1b_sched*``）与 Stage B 标定（``e1calib_steps*``）把剂量固定在
+#: 交叉点上、tag 里不带剂量，所以这条正则同时就是"只留剂量网格"的判据。
+DOSE_TAG_RE = re.compile(r"_bad\d+_rho[0-9p]+_s\d+$")
+
+
+def select_dose_grid(frame: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    """从全部 run 里挑出 stage-1 的剂量网格，返回 ``(网格帧, 被排除的 run_id)``。
+
+    **为什么必须挑**：``bad_num_fixed=4 / poison_rate_fixed=0.1`` 是配置里的交叉点,
+    1B 的 6 个调度、Stage B 的 3 个标定、4 个 FedRep 标定**全都落在这个坐标上**。
+    而剂量表是按 (N_m, ρ_p, seed) 归组的 —— 不挑的话这 14 个 run 会被并成一格，
+    图上看不出任何异样。2026-09 的那批汇总就是这样出来的：同一格
+    ``dose_response`` 读出 filtered benign 0.969、``tiers`` 读出 unfiltered
+    benign 0.291，而 unfiltered 只可能**高于** filtered 约 10 个百分点。
+    """
+    run_ids = frame["run_id"].astype(str)
+    # 传 pattern 字符串而不是编译好的对象：pandas 对 compiled pat 另有一套
+    # case/flags 的限制，没必要碰。
+    keep = run_ids.str.contains(DOSE_TAG_RE.pattern, regex=True, na=False)
+    dropped = sorted(set(run_ids[~keep]))
+    return frame[keep], dropped
+
+
+def _tail_block_per_run(frame: pd.DataFrame, tail: int
+                        ) -> Dict[Tuple[int, float, int], Tuple[str, pd.DataFrame]]:
+    """按 **run** 取尾部 ``tail`` 行，再按 ``(N_m, ρ_p, seed)`` 归位。
+
+    先按 run 取尾、而不是把整格的行并起来再取尾 —— 后者在同一坐标有多个 run 时
+    取到的是"轮次最大的那 3 行"，那可能来自任意几个 run 的混合（pandas 的
+    稳定排序让结果取决于文件读入顺序）。
+
+    同一坐标出现多个 run 就 ``ValueError``。这里**不做平均**：那几个 run 之所以
+    同坐标，要么是不同实验臂（1B 调度 / 标定 / FedRep），要么是旧批次的遗留，
+    平均它们没有任何定义（铁律 #3、#5）。
+    """
+    cells: Dict[Tuple[int, float, int], List[Tuple[str, pd.DataFrame]]] = {}
+    for run_id, group in frame.groupby("run_id"):
         group = group.sort_values("round")
         if len(group) < tail:
             continue
-        block = group.iloc[-tail:]
+        first = group.iloc[0]
+        key = (int(first["bad_client_num"]), float(first["poison_rate"]),
+               int(first["seed"]))
+        cells.setdefault(key, []).append((str(run_id), group.iloc[-tail:]))
+
+    collisions = {k: v for k, v in cells.items() if len(v) > 1}
+    if collisions:
+        lines = []
+        for key in sorted(collisions):
+            names = ", ".join(sorted(r for r, _ in collisions[key]))
+            lines.append(f"  Nm={key[0]}, rho={key[1]}, seed={key[2]}: "
+                         f"{len(collisions[key])} 个 run -> {names}")
+        raise ValueError(
+            "同一个 (N_m, ρ_p, seed) 坐标下有多个 run，**拒绝把它们平均成一格**：\n"
+            + "\n".join(lines)
+            + "\n多半是 1B 调度跑 / Stage B 标定跑与剂量网格共用了交叉点坐标 —— "
+              "先过一遍 select_dose_grid()；若仍冲突，就是结果目录里有旧批次遗留。")
+    return {k: v[0] for k, v in cells.items()}
+
+
+def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
+    """每个 (N_m, ρ_p, seed) 的尾部平均 ASR、MTA 与 ACC。"""
+    rows: List[Dict[str, Any]] = []
+    for keys, (run_id, block) in sorted(_tail_block_per_run(frame, tail).items()):
         rows.append({
             "bad_client_num": int(keys[0]), "poison_rate": float(keys[1]),
             "seed": int(keys[2]),
@@ -382,6 +519,8 @@ def dose_response(frame: pd.DataFrame, tail: int = 3) -> pd.DataFrame:
             "mta": float(block[MTA_COLUMN].mean()),
             "acc_personalized": float(block["acc_personalized"].mean()),
             "n_tail": int(tail),
+            # 这一格到底是哪个 run 出来的 —— 事后查证不必再回去猜。
+            "run_id": run_id,
         })
     return pd.DataFrame(rows)
 
@@ -407,11 +546,8 @@ def dose_response_tiers(frame: pd.DataFrame,
     present = [c for c in cols
                if c in frame.columns and bool(np.isfinite(frame[c]).any())]
     rows: List[Dict[str, Any]] = []
-    for keys, group in frame.groupby(["bad_client_num", "poison_rate", "seed"]):
-        group = group.sort_values("round")
-        if len(group) < tail:
-            continue
-        block = group.iloc[-tail:]
+    # 与 dose_response 走同一条归组路径：先按 run 取尾，同坐标多 run 直接报错。
+    for keys, (run_id, block) in sorted(_tail_block_per_run(frame, tail).items()):
         for col in present:
             value = float(block[col].mean())
             if not np.isfinite(value):
@@ -423,6 +559,7 @@ def dose_response_tiers(frame: pd.DataFrame,
                 # 记下实际用了哪一列 —— 图注要据此说明是不是排除了目标类，
                 # 而不是像旧版那样把 "unfiltered" 写死在文案里。
                 "source_column": col,
+                "run_id": run_id,
             })
     return pd.DataFrame(rows)
 
@@ -1017,20 +1154,44 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  ⚠️ 这批图是 unfiltered 的，而报告 §2 / diag/METRICS.md 写的是 "
               "filtered（差约 10 个百分点）。对外报数前确认这是有意为之。")
 
+    stale = runs_without_the_asr_column(frame, ASR_COLUMN)
+    if stale:
+        print(f"[analysis_exp1] ⚠️ 有 {len(stale)} 个 run 的 {ASR_COLUMN} 整列为空，"
+              f"但它们的 MTA/ACC 仍会落进表里：")
+        for run_id in stale:
+            print(f"    - {run_id}")
+        print("    这几乎一定是旧代码跑出来的 run（该列是后加的）。"
+              "先确认它们的 local_steps / total_round 与这一批一致，"
+              "不一致就把文件移走重跑 —— 否则表上是新配置的格子、"
+              "数值却来自旧配置。")
+
     # 持续性长跑（run_id 带 "persist"）是独立实验（400 轮），不能混进 stage-1
     # 与 1B-timing 的分析，否则它那条 400 轮的 burst 会污染阈值/剂量/调度图。
     is_persist = frame["run_id"].str.contains("persist", na=False)
     persist_runs = frame[is_persist]
     core = frame[~is_persist]
 
-    stage1 = core[core["schedule"] == "continuous"]
+    # 剂量网格 = 剂量编在 run tag 里的那一族。1B 的调度跑与 Stage B 的标定跑
+    # 把剂量固定在交叉点 (Nm=4, ρ=0.1) 上，坐标与网格格子重合，**必须先剔掉**，
+    # 否则一格会由十几个 run 混成（见 select_dose_grid 的 docstring）。
+    grid, dropped_from_grid = select_dose_grid(core[core["schedule"] == "continuous"])
+    if dropped_from_grid:
+        print(f"[analysis_exp1] 剂量网格排除了 {len(dropped_from_grid)} 个"
+              f"非网格 run（调度 / 标定 / 其他臂）：")
+        for run_id in dropped_from_grid:
+            print(f"    - {run_id}")
+    if grid.empty:
+        print("[analysis_exp1] ⚠️ 没有一个 run 的 tag 带剂量（_bad<N>_rho<R>_s<S>），"
+              "剂量表退回用全部 continuous run —— 同坐标多 run 会直接报错。")
+        grid = core[core["schedule"] == "continuous"]
+    stage1 = grid if not grid.empty else core
     stage1b = core
 
     crossings = crossing_table(core, args.level)
     crossings.to_csv(f"{prefix}_crossings.csv", index=False)
     verdict = threshold_verdict(crossings, core)
 
-    response = dose_response(stage1 if not stage1.empty else core, args.tail)
+    response = dose_response(stage1, args.tail)
     response.to_csv(f"{prefix}_dose_response.csv", index=False)
     onset = onset_analysis(core)
     onset.to_csv(f"{prefix}_onset.csv", index=False)
@@ -1095,8 +1256,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         figures.append(plot_e1_4(response, out_dir / "exp1_E4_dose_response.png"))
         figures.append(plot_e1_5(response, out_dir / "exp1_E5_dose_heatmap.png"))
         figures.append(plot_acc_heatmap(response, out_dir / "exp1_ACC_heatmap.png"))
-    # E1-6：三档 ASR 并列（把 asr_paper_all 的平均伪影摊开）
-    tiers = dose_response_tiers(core, tail=args.tail)
+    # E1-6：三档 ASR 并列（把 asr_paper_all 的平均伪影摊开）。
+    # 用与 dose_response 同一个 stage1 帧 —— 以前这里传的是 core（连 burst/late
+    # 都算进去），于是两张表在同一格上读的根本不是同一批行。
+    tiers = dose_response_tiers(stage1, tail=args.tail)
     tiers.to_csv(f"{prefix}_asr_tiers.csv", index=False)
     figures.append(plot_e1_6(tiers, out_dir / "exp1_E6_asr_tiers.png"))
     if stage1b["schedule"].nunique() > 1:
