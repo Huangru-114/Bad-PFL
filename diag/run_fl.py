@@ -187,7 +187,8 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
            generator_online_from: Optional[int] = None,
            freeze_trigger_eval: bool = False,
            pfl: Optional[str] = None,
-           fedrep_head_steps: Optional[int] = None) -> Path:
+           fedrep_head_steps: Optional[int] = None,
+           save_ckpt: bool = True) -> Path:
     """跑一次完整的 FL 训练并保存 checkpoint，返回 checkpoint 目录。
 
     Parameters
@@ -212,6 +213,10 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
         暴露 FedBN 下原始全局模型的退化程度。
     instrument_dir:
         逐轮 npz 的落盘根目录（实验 I §5.3 / 实验 J §2.2）。``None`` 关闭。
+    save_ckpt:
+        训练结束时是否保存 checkpoint（全局模型、本地模型、生成器、元数据）。
+        ``False`` 时只做 I/O 类的埋点（快照、CSVs），不产生巨大的模型文件。
+        用于共享存储空间不足时的快速实验（你仍需原始数据中的 meta.json 做离线分析）。
     """
     if mode not in ("clean", "attack"):
         raise ValueError(f"mode 必须是 'clean' 或 'attack'，收到 '{mode}'")
@@ -641,18 +646,19 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             [test_dataset[i][0] for i in range(min(16, len(test_dataset)))]
         ).to(torch_device)
 
-    save_run(ckpt_dir, server, clients, meta, generator, reference_batch)
-    if generator is not None:
-        # 让任何一份生成器 checkpoint 都能独立追溯到它的训练条件。
-        save_generator_meta(ckpt_dir / "generator", {
-            "target_label": target_class,
-            "epsilon": float(cfg.perturb.eps_xi),
-            "sigma": float(cfg.perturb.eps_delta),
-            "total_rounds": total_round,
-            "seed": int(seed),
-            "alpha": float(alpha),
-            "run_id": base_name,
-        })
+    if save_ckpt:
+        save_run(ckpt_dir, server, clients, meta, generator, reference_batch)
+        if generator is not None:
+            # 让任何一份生成器 checkpoint 都能独立追溯到它的训练条件。
+            save_generator_meta(ckpt_dir / "generator", {
+                "target_label": target_class,
+                "epsilon": float(cfg.perturb.eps_xi),
+                "sigma": float(cfg.perturb.eps_delta),
+                "total_rounds": total_round,
+                "seed": int(seed),
+                "alpha": float(alpha),
+                "run_id": base_name,
+            })
     print(f"[run_fl] mode={mode} alpha={alpha} seed={seed} -> {ckpt_dir}")
 
     if tracker is not None and tracker.implantation_rows:
@@ -671,12 +677,14 @@ def run_fl(cfg: Cfg, mode: str, alpha: float, seed: int, *, smoke: bool = False,
             edges.to_csv(edge_out, index=False)
             print(f"[run_fl] 逐 edge {len(edges)} 行 -> {edge_out}")
 
-    if verify_against:
+    if verify_against and save_ckpt:
         ok, report = compare_run_checkpoints(Path(verify_against), ckpt_dir)
         print(report)
         if ok:
             print("[run_fl] ✅ 与旧 run 逐位一致 —— 快照埋点确实没有改变训练"
                   "动力学，实验 E 在旧 run 上的结论可直接沿用。")
+    elif verify_against and not save_ckpt:
+        print("[run_fl] ⚠️  --verify-against 被忽略，因为 --no-save-ckpt 禁用了 checkpoint 保存")
     return ckpt_dir
 
 
@@ -771,6 +779,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--freeze-trigger-eval", action="store_true",
                         help="B 线：停攻点快照 (x+ξ+δ) 评估图、之后复用，另存 "
                              "asr_paper_frozen_*，量纯权重驻留")
+    parser.add_argument("--no-save-ckpt", action="store_false", dest="save_ckpt",
+                        help="不保存 checkpoint（全局模型、本地模型、生成器）。"
+                             "共享存储空间不足时使用；快照、元数据、CSV 仍会保存")
     args = parser.parse_args(argv)
 
     schedule = AttackSchedule(
@@ -797,7 +808,8 @@ def main(argv: Optional[List[str]] = None) -> int:
            schedule=schedule,
            generator_online_from=args.generator_online_from,
            freeze_trigger_eval=args.freeze_trigger_eval,
-           pfl=args.pfl, fedrep_head_steps=args.fedrep_head_steps)
+           pfl=args.pfl, fedrep_head_steps=args.fedrep_head_steps,
+           save_ckpt=args.save_ckpt)
     return 0
 
 
