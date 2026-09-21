@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/run_exp1.py", line 41, in <module>
+    from .config import Cfg, load_config
+  File "/nobackup/proj/disk/naiss2025-22-1095/personal/ziangg/Bad-PFL/diag/config.py", line 13, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

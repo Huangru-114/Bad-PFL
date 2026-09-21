@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH -n 1
 #SBATCH -c 4
-#SBATCH -t 01:00:00
-#SBATCH -p cpu
-#SBATCH -J diagnose_poison
-#SBATCH -o logs/diagnose_poison.log
+#SBATCH --gpus 1
+#SBATCH -t 24:00:00
+#SBATCH -A naiss2026-4-650-gpu
+#SBATCH -p gpu
+#SBATCH -J exp1_analysis
+#SBATCH -o logs/analysis_exp1.log
 
 # 诊断投毒率 ρ 对 ASR 影响的根本原因
 # 用法：sbatch diag/diagnose_poison_effect.sbatch
